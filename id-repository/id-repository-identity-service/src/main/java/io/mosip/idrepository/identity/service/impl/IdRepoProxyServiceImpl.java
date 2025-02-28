@@ -422,6 +422,9 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 				mosipLogger.info("modality : {}",modality);
 				List<BIR> birTypesForModality = originalBirs.stream()
 						.filter(bir -> bir.getBdbInfo().getType().get(0).value().equalsIgnoreCase(modality.value()))
+						.filter(bir -> bir.getOthers().keySet().stream()
+								.anyMatch(key -> key.contentEquals("EXCEPTION")))
+						.filter(bir -> bir.getOthers().get("EXCEPTION").contentEquals("false"))
 						.collect(Collectors.toList());
 				mosipLogger.info("birTypesForModality : {}",birTypesForModality.toString());
 				Optional<Entry<String, String>> extractionFormatForModality = extractionFormats.entrySet().stream()
