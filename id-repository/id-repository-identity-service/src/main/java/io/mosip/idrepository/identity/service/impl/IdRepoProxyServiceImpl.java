@@ -66,6 +66,7 @@ import io.mosip.kernel.core.http.ResponseWrapper;
 import io.mosip.kernel.core.logger.spi.Logger;
 import io.mosip.kernel.core.util.CryptoUtil;
 
+
 /**
  * The Class IdRepoServiceImpl - Service implementation for Identity service.
  *
@@ -418,21 +419,24 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 			List<CompletableFuture<List<BIR>>> extractionFutures = new ArrayList<>();
 
 			for (BiometricType modality : SUPPORTED_MODALITIES) {
+				mosipLogger.info("modality : {}",modality);
 				List<BIR> birTypesForModality = originalBirs.stream()
 						.filter(bir -> bir.getBdbInfo().getType().get(0).value().equalsIgnoreCase(modality.value()))
 						.collect(Collectors.toList());
-
+				mosipLogger.info("birTypesForModality : {}",birTypesForModality.toString());
 				Optional<Entry<String, String>> extractionFormatForModality = extractionFormats.entrySet().stream()
 						.filter(ent -> ent.getKey().toLowerCase().contains(modality.value().toLowerCase())).findAny();
-
+				mosipLogger.info("extractionFormatForModality : {}",extractionFormatForModality.toString());
 				if (!extractionFormatForModality.isEmpty()) {
 					Entry<String, String> format = extractionFormatForModality.get();
+					mosipLogger.info("format : {}",format.toString());
 					CompletableFuture<List<BIR>> extractTemplateFuture = biometricExtractionService.extractTemplate(
 							uinHash, fileName, format.getKey(), format.getValue(), birTypesForModality);
+					mosipLogger.info("extractTemplateFuture : {}",extractTemplateFuture.toString());
 					extractionFutures.add(extractTemplateFuture);
 
 				} else {
-					mosipLogger.info(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate",
+					mosipLogger.info("test", ID_REPO_SERVICE_IMPL, "extractTemplate",
 							"GETTING NON EXTRACTED FORMAT for Modality: " + modality.name());
 					finalBirs.addAll(birTypesForModality);
 				}
@@ -443,7 +447,6 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 			for (CompletableFuture<List<BIR>> future : extractionFutures) {
 				finalBirs.addAll(future.get());
 			}
-
 			return cbeffUtil.createXML(finalBirs);
 		} catch (IdRepoAppUncheckedException e) {
 			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate", e.getMessage());

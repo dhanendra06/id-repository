@@ -8,6 +8,9 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.stream.Collectors;
 
+import io.mosip.idrepository.core.logger.IdRepoLogger;
+import io.mosip.idrepository.identity.service.impl.IdRepoServiceImpl;
+import io.mosip.kernel.core.logger.spi.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -29,7 +32,9 @@ public class BioExtractionHelper {
 	/** The bio api factory. */
 	@Autowired
 	private BioAPIFactory bioApiFactory;
-	
+
+	Logger mosipLogger = IdRepoLogger.getLogger(BioExtractionHelper.class);
+
 	/**
 	 * Extract templates.
 	 *
@@ -49,6 +54,8 @@ public class BioExtractionHelper {
 				iBioProviderApi bioProvider = bioApiFactory.getBioProvider(BiometricType.fromValue(modality.value()),
 						BiometricFunction.EXTRACT);
 				List<BIR> extractedTemplates = bioProvider.extractTemplate(entry.getValue(), extractionFormats);
+				mosipLogger.info("extractedTemplates from biosdk {}",extractedTemplates.size());
+				mosipLogger.info("extractedTemplates from biosdk {}",extractedTemplates.toString());
 				allExtractedTemplates.addAll(extractedTemplates);
 			}
 			
