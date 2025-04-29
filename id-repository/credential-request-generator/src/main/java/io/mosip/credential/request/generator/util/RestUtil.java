@@ -1,32 +1,14 @@
 package io.mosip.credential.request.generator.util;
 
-import com.google.gson.Gson;
 import io.mosip.credential.request.generator.constants.ApiName;
-import io.mosip.idrepository.core.dto.Metadata;
-import io.mosip.idrepository.core.dto.SecretKeyRequest;
-import io.mosip.idrepository.core.dto.TokenRequestDTO;
 import io.mosip.idrepository.core.util.EnvUtil;
-import io.mosip.kernel.core.util.DateUtils;
-import io.mosip.kernel.core.util.StringUtils;
-import io.mosip.kernel.core.util.TokenHandlerUtil;
-import org.apache.hc.core5.http.Header;
-import org.apache.hc.core5.http.ParseException;
-import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
-import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
-import org.apache.hc.client5.http.classic.methods.HttpPost;
-import org.apache.hc.core5.http.io.entity.StringEntity;
-
-import org.apache.hc.client5.http.impl.classic.HttpClientBuilder;
-import org.apache.hc.client5.http.impl.classic.HttpClients;
-import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
-import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -35,9 +17,6 @@ import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
-import java.security.KeyManagementException;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Objects;
 
@@ -62,7 +41,9 @@ public class RestUtil {
 	@Value("${idrepo.default.processor.httpclient.connections.max:100}")
 	private int totalMaxConnection;
 
-	private RestTemplate restTemplate;
+	@Autowired
+	@Qualifier("selfTokenRestTemplate")
+	RestTemplate restTemplate;
 
 	/**
 	 * Post api.
@@ -105,10 +86,7 @@ public class RestUtil {
 				}
 			}
 
-        RestTemplate restTemplate;
-
         try {
-            restTemplate = getRestTemplate();
 				result = (T) restTemplate.postForObject(builder.toUriString(), setRequestHeader(requestType, mediaType),
 						responseClass);
 
@@ -161,10 +139,7 @@ public class RestUtil {
 
 			}
 			uriComponents = builder.build(false).encode();
-        RestTemplate restTemplate;
-
         try {
-            restTemplate = getRestTemplate();
 				result = (T) restTemplate
 						.exchange(uriComponents.toUri(), HttpMethod.GET, setRequestHeader(null, null), responseType)
                     .getBody();
@@ -177,34 +152,6 @@ public class RestUtil {
     }
 
 	/**
-	 * Gets the rest template.
-	 *
-	 * @return the rest template
-	 * @throws KeyManagementException   the key management exception
-	 * @throws NoSuchAlgorithmException the no such algorithm exception
-	 * @throws KeyStoreException        the key store exception
-	 */
-	public RestTemplate getRestTemplate() throws KeyManagementException, NoSuchAlgorithmException, KeyStoreException {
-		if (restTemplate == null) {	
-			
-			var connnectionManagerBuilder = PoolingHttpClientConnectionManagerBuilder.create()
-				     .setMaxConnPerRoute(maxConnectionPerRoute)
-				     .setMaxConnTotal(totalMaxConnection);
-			var connectionManager = connnectionManagerBuilder.build();
-			HttpClientBuilder httpClientBuilder = HttpClients.custom()
-					.setConnectionManager(connectionManager)
-					.disableCookieManagement();
-			
-			HttpComponentsClientHttpRequestFactory requestFactory = new HttpComponentsClientHttpRequestFactory();
-			requestFactory.setHttpClient(httpClientBuilder.build());
-
-			restTemplate = new RestTemplate(requestFactory);
-		}
-		return restTemplate;
-	}
-	
-
-	/**
 	 * Sets the request header.
 	 *
 	 * @param requestType the request type
@@ -212,95 +159,25 @@ public class RestUtil {
 	 * @return the http entity
 	 * @throws IOException Signals that an I/O exception has occurred.
 	 */
-    private HttpEntity<Object> setRequestHeader(Object requestType, MediaType mediaType) throws IOException {
-        MultiValueMap<String, String> headers = new LinkedMultiValueMap<String, String>();
-        headers.add("Cookie", getToken());
-        if (mediaType != null) {
-            headers.add("Content-Type", mediaType.toString());
-        }
-        if (requestType != null) {
-            try {
-                HttpEntity<Object> httpEntity = (HttpEntity<Object>) requestType;
-                HttpHeaders httpHeader = httpEntity.getHeaders();
+	private HttpEntity<Object> setRequestHeader(Object requestType, MediaType mediaType) throws IOException {
+		MultiValueMap<String, String> headers = new LinkedMultiValueMap<String, String>();
+		if (mediaType != null) {
+			headers.add("Content-Type", mediaType.toString());
+		}
+		if (requestType != null) {
+			try {
+				HttpEntity<Object> httpEntity = (HttpEntity<Object>) requestType;
+				HttpHeaders httpHeader = httpEntity.getHeaders();
 				for (String key : httpHeader.keySet()) {
-					if (!(headers.containsKey(CONTENT_TYPE) && key.equals(CONTENT_TYPE)))
-					{
+					String contentType = "Content-Type";
+					if (!(headers.containsKey(contentType) && key.equals(contentType)))
 						headers.add(key, Objects.requireNonNull(httpHeader.get(key)).get(0));
-					}
 				}
-                return new HttpEntity<Object>(httpEntity.getBody(), headers);
-            } catch (ClassCastException e) {
-                return new HttpEntity<Object>(requestType, headers);
-            }
-        } else
-            return new HttpEntity<Object>(headers);
-    }
-
-	/**
-	 * Gets the token.
-	 *
-	 * @return the token
-	 * @throws IOException Signals that an I/O exception has occurred.
-	 */
-    public String getToken() throws IOException {
-        String token = System.getProperty("token");
-        boolean isValid = false;
-
-        if (StringUtils.isNotEmpty(token)) {
-
-			isValid = TokenHandlerUtil.isValidBearerToken(token,
-					EnvUtil.getCredReqTokenIssuerUrl(),
-					EnvUtil.getCredReqTokenClientId());
-
-
-        }
-        if (!isValid) {
-            TokenRequestDTO<SecretKeyRequest> tokenRequestDTO = new TokenRequestDTO<SecretKeyRequest>();
-			tokenRequestDTO.setId(EnvUtil.getCredReqTokenRequestId());
-            tokenRequestDTO.setMetadata(new Metadata());
-
-            tokenRequestDTO.setRequesttime(DateUtils.getUTCCurrentDateTimeString());
-            // tokenRequestDTO.setRequest(setPasswordRequestDTO());
-            tokenRequestDTO.setRequest(setSecretKeyRequestDTO());
-			tokenRequestDTO.setVersion(EnvUtil.getCredReqTokenVersion());
-
-            Gson gson = new Gson();
-            CloseableHttpClient httpClient = HttpClientBuilder.create().build();
-            // HttpPost post = new
-            // HttpPost(environment.getProperty("PASSWORDBASEDTOKENAPI"));
-            HttpPost post = new HttpPost(environment.getProperty("KEYBASEDTOKENAPI"));
-            try {
-                StringEntity postingString = new StringEntity(gson.toJson(tokenRequestDTO));
-                post.setEntity(postingString);
-                post.setHeader("Content-type", "application/json");
-                CloseableHttpResponse response = httpClient.execute(post);
-                org.apache.hc.core5.http.HttpEntity entity = response.getEntity();
-                String responseBody = EntityUtils.toString(entity, "UTF-8");
-                Header[] cookie = response.getHeaders("Set-Cookie");
-                if (cookie.length == 0)
-                    throw new IOException("cookie is empty. Could not generate new token.");
-                token = response.getHeaders("Set-Cookie")[0].getValue();
-                System.setProperty("token", token.substring(14, token.indexOf(';')));
-                return token.substring(0, token.indexOf(';'));
-            } catch (IOException e) {
-                throw e;
-            }catch (ParseException e) {
-                throw new RuntimeException(e);
-            }
-        }
-        return AUTHORIZATION + token;
-    }
-
-	/**
-	 * Sets the secret key request DTO.
-	 *
-	 * @return the secret key request
-	 */
-    private SecretKeyRequest setSecretKeyRequestDTO() {
-        SecretKeyRequest request = new SecretKeyRequest();
-		request.setAppId(EnvUtil.getCredReqTokenAppId());
-		request.setClientId(EnvUtil.getCredReqTokenClientId());
-		request.setSecretKey(EnvUtil.getCredReqTokenSecretKey());
-        return request;
-    }
+				return new HttpEntity<Object>(httpEntity.getBody(), headers);
+			} catch (ClassCastException e) {
+				return new HttpEntity<Object>(requestType, headers);
+			}
+		} else
+			return new HttpEntity<Object>(headers);
+	}
 }
