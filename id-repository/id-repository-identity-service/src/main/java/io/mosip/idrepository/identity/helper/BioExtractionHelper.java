@@ -40,22 +40,27 @@ public class BioExtractionHelper {
 	 */
 	public List<BIR> extractTemplates(List<BIR> birs, Map<String, String> extractionFormats) throws BiometricExtractionException {
 		try {
-			Map<BiometricType, List<BIR>> birsByType = birs.stream().collect(Collectors.groupingBy(bir -> bir.getBdbInfo().getType().get(0)));
-			
-			List<BIR> allExtractedTemplates =  new ArrayList<>();
-			
-			for (Entry<BiometricType,List<BIR>> entry : birsByType.entrySet()) {
-				BiometricType modality = entry.getKey();
-				iBioProviderApi bioProvider = bioApiFactory.getBioProvider(BiometricType.fromValue(modality.value()),
-						BiometricFunction.EXTRACT);
-				List<BIR> extractedTemplates = bioProvider.extractTemplate(entry.getValue(), extractionFormats);
-				allExtractedTemplates.addAll(extractedTemplates);
-			}
-			
+			Map<BiometricType, List<BIR>> birsByType = birs.stream()
+					.collect(Collectors.groupingBy(bir -> bir.getBdbInfo().getType().get(0)));
+
+			List<BIR> allExtractedTemplates = birsByType.entrySet().parallelStream()
+					.flatMap(entry -> {
+						try {
+							BiometricType modality = entry.getKey();
+							iBioProviderApi bioProvider = bioApiFactory.getBioProvider(
+									BiometricType.fromValue(modality.value()), BiometricFunction.EXTRACT);
+							List<BIR> extractedTemplates = bioProvider.extractTemplate(entry.getValue(), extractionFormats);
+							return extractedTemplates.stream();
+						} catch (Exception e) {
+							throw new RuntimeException("Error during bio extraction for modality: " + entry.getKey(), e);
+						}
+					})
+					.collect(Collectors.toList());
+
 			return allExtractedTemplates;
-			
-		} catch (Exception e) {
-			throw new BiometricExtractionException(TECHNICAL_ERROR, e);
+
+		} catch (RuntimeException e) {
+			throw new BiometricExtractionException(TECHNICAL_ERROR, e.getCause() != null ? e.getCause() : e);
 		}
 	}
 
