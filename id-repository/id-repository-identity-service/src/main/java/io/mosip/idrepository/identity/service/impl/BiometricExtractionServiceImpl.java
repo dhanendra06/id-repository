@@ -52,21 +52,21 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 	public CompletableFuture<List<BIR>> extractTemplate(String uinHash, String fileName,
 														String extractionType, String extractionFormat, List<BIR> birsForModality) throws IdRepoAppException {
 
-		long startTime = System.currentTimeMillis();
+	//	long startTime = System.currentTimeMillis();
 
 		String extractionFileName = fileName.split("\\.")[0] + DOT + getModalityForFormat(extractionType) + DOT + extractionFormat;
 
 		try {
 			// Step 1: Check if extracted template already exists
 			if (objectStoreHelper.biometricObjectExists(uinHash, extractionFileName)) {
-				logInfo("RETURNING EXISTING EXTRACTED BIOMETRICS FOR FORMAT", extractionType, extractionFormat);
+			//	logInfo("RETURNING EXISTING EXTRACTED BIOMETRICS FOR FORMAT", extractionType, extractionFormat);
 
 				long startRead = System.currentTimeMillis();
 				byte[] xmlBytes = objectStoreHelper.getBiometricObject(uinHash, extractionFileName);
 				List<BIR> existingBirs = cbeffUtil.getBIRDataFromXML(xmlBytes);
-				logTime("Time taken to read and parse existing BIRs", startRead);
+			//	logTime("Time taken to read and parse existing BIRs", startRead);
 
-				logTime("Total time (cache hit)", startTime);
+			//	logTime("Total time (cache hit)", startTime);
 				return CompletableFuture.completedFuture(existingBirs);
 			}
 		} catch (ObjectStoreAdapterException e) {
@@ -76,23 +76,23 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
         }
 
         try {
-			logInfo("EXTRACTING BIOMETRICS FOR FORMAT", extractionType, extractionFormat);
+			//logInfo("EXTRACTING BIOMETRICS FOR FORMAT", extractionType, extractionFormat);
 
 			Map<String, String> formatFlag = Map.of(getFormatFlag(extractionType), extractionFormat);
 
 			long extractionStart = System.currentTimeMillis();
 			List<BIR> extractedBiometrics = extractBiometricTemplate(formatFlag, birsForModality);
-			logTime("Biometric extraction time", extractionStart);
+			//logTime("Biometric extraction time", extractionStart);
 
 			// Step 2: Store extracted data if present
 			if (!extractedBiometrics.isEmpty()) {
 				long writeStart = System.currentTimeMillis();
 				byte[] xml = cbeffUtil.createXML(extractedBiometrics);
 				objectStoreHelper.putBiometricObject(uinHash, extractionFileName, xml);
-				logTime("Time to serialize and store extracted BIRs", writeStart);
+			//	logTime("Time to serialize and store extracted BIRs", writeStart);
 			}
 
-			logTime("Total extraction time", startTime);
+			//logTime("Total extraction time", startTime);
 			return CompletableFuture.completedFuture(extractedBiometrics);
 		} catch (BiometricExtractionException e) {
 			logError("BiometricExtractionException occurred", e);
