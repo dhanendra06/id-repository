@@ -409,7 +409,7 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 		});
 	}
 
-	protected byte[] getBiometricsForRequestedFormats(String uinHash, String fileName,
+	/*protected byte[] getBiometricsForRequestedFormats(String uinHash, String fileName,
 													  Map<String, String> extractionFormats, byte[] originalData) throws IdRepoAppException {
 		try {
 			List<BIR> originalBirs = cbeffUtil.getBIRDataFromXML(originalData);
@@ -461,8 +461,51 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate", e.getMessage());
 			throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
 		}
-	}
+	}*/
 
+	protected byte[] getBiometricsForRequestedFormats(String uinHash, String fileName,
+													  Map<String, String> extractionFormats, byte[] originalData) throws IdRepoAppException {
+		try {
+			List<BIR> originalBirs = cbeffUtil.getBIRDataFromXML(originalData);
+			List<BIR> finalBirs = new ArrayList<>();
+			List<CompletableFuture<List<BIR>>> extractionFutures = new ArrayList<>();
+
+			for (BiometricType modality : SUPPORTED_MODALITIES) {
+				List<BIR> modalityBirs = originalBirs.stream()
+						.filter(bir -> bir.getBdbInfo().getType().get(0).value().equalsIgnoreCase(modality.value()))
+						.filter(bir -> "false".equals(bir.getOthers().get("EXCEPTION")))
+						.collect(Collectors.toList());
+
+				Optional<Entry<String, String>> formatOpt = extractionFormats.entrySet().stream()
+						.filter(entry -> entry.getKey().toLowerCase().contains(modality.value().toLowerCase()))
+						.findFirst();
+
+				if (formatOpt.isPresent() && !modalityBirs.isEmpty()) {
+					Entry<String, String> format = formatOpt.get();
+					extractionFutures.add(biometricExtractionService.extractTemplate(
+							uinHash, fileName, format.getKey(), format.getValue(), modalityBirs));
+				} else {
+					mosipLogger.info(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate",
+							"Using non-extracted format for modality: " + modality.name());
+					finalBirs.addAll(modalityBirs);
+				}
+			}
+			CompletableFuture.allOf(extractionFutures.toArray(new CompletableFuture[0])).join();
+			for (CompletableFuture<List<BIR>> future : extractionFutures) {
+				finalBirs.addAll(future.get());
+			}
+			return cbeffUtil.createXML(finalBirs);
+		} catch (IdRepoAppUncheckedException | InterruptedException e) {
+			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate", e.getMessage());
+			if (e instanceof InterruptedException) {
+				Thread.currentThread().interrupt();
+			}
+			throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
+		} catch (Exception e) {
+			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate", e.getMessage());
+			throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
+		}
+	}
 	/*
 	 * (non-Javadoc)
 	 *
