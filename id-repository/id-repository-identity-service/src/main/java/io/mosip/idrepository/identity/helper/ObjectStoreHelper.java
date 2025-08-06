@@ -25,6 +25,8 @@ import io.mosip.idrepository.core.constant.IdRepoErrorConstants;
 import io.mosip.idrepository.core.exception.IdRepoAppException;
 import io.mosip.idrepository.core.security.IdRepoSecurityManager;
 import io.mosip.kernel.core.fsadapter.exception.FSAdapterException;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 @Component
 public class ObjectStoreHelper {
@@ -120,11 +122,11 @@ public class ObjectStoreHelper {
 
 	private byte[] getObject(String uinHash, boolean isBio, String fileRefId, String refId) throws IdRepoAppException {
 		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-		try (InputStream objStream = objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName)) {
-			if (objStream == null) {
+		try (ResponseInputStream<GetObjectResponse> s3stream = objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName)) {
+			if (s3stream == null) {
 				throw new IdRepoAppException(FILE_NOT_FOUND);
 			}
-			byte[] encrypted = IOUtils.toByteArray(objStream);
+			byte[] encrypted = s3stream.readAllBytes();
 			return securityManager.decrypt(encrypted, refId);
 		} catch (FSAdapterException | IOException e) {
 			throw new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR, e);
