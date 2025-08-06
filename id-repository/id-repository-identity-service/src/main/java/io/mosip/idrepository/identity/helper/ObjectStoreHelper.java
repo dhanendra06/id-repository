@@ -19,8 +19,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
-import com.amazonaws.services.s3.model.AmazonS3Exception;
-
 import io.mosip.commons.khazana.spi.ObjectStoreAdapter;
 import io.mosip.idrepository.core.logger.IdRepoLogger;
 import io.mosip.idrepository.core.constant.IdRepoErrorConstants;
@@ -28,26 +26,17 @@ import io.mosip.idrepository.core.exception.IdRepoAppException;
 import io.mosip.idrepository.core.security.IdRepoSecurityManager;
 import io.mosip.kernel.core.fsadapter.exception.FSAdapterException;
 
-/**
- * @author Manoj SP
- *
- */
 @Component
 public class ObjectStoreHelper {
-	
+
 	@Value("${" + BIO_DATA_REFID + "}")
 	private String bioDataRefId;
-	
+
 	@Value("${" + DEMO_DATA_REFID + "}")
 	private String demoDataRefId;
 
-	/** The Constant SLASH. */
 	private static final String SLASH = "/";
-
-	/** The Constant BIOMETRICS. */
 	private static final String BIOMETRICS = "Biometrics";
-
-	/** The Constant DEMOGRAPHICS. */
 	private static final String DEMOGRAPHICS = "Demographics";
 
 	@Value("${" + OBJECT_STORE_ACCOUNT_NAME + "}")
@@ -58,10 +47,9 @@ public class ObjectStoreHelper {
 
 	@Value("${" + OBJECT_STORE_ADAPTER_NAME + "}")
 	private String objectStoreAdapterName;
-	
+
 	private ObjectStoreAdapter objectStore;
 
-	/** The mosip logger. */
 	private Logger mosipLogger = IdRepoLogger.getLogger(ObjectStoreHelper.class);
 
 	@Autowired
@@ -69,7 +57,6 @@ public class ObjectStoreHelper {
 		this.objectStore = context.getBean(objectStoreAdapterName, ObjectStoreAdapter.class);
 	}
 
-	/** The security manager. */
 	@Autowired
 	private IdRepoSecurityManager securityManager;
 
@@ -102,7 +89,7 @@ public class ObjectStoreHelper {
 		}
 		return getObject(uinHash, true, fileRefId, bioDataRefId);
 	}
-	
+
 	public void deleteBiometricObject(String uinHash, String fileRefId) {
 		if (this.biometricObjectExists(uinHash, fileRefId)) {
 			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
@@ -119,24 +106,28 @@ public class ObjectStoreHelper {
 			throws IdRepoAppException {
 		try {
 			String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-			long encryptStartTime = System.currentTimeMillis();
-			InputStream encryptData = new ByteArrayInputStream(securityManager.encrypt(data, refId));
-			long startTime = System.currentTimeMillis();
-			objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName, encryptData);
-		} catch (AmazonS3Exception | FSAdapterException e) {
+			byte[] encrypted = securityManager.encrypt(data, refId);
+			try (InputStream encryptData = new ByteArrayInputStream(encrypted)) {
+				objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName, encryptData);
+			}
+		} catch (FSAdapterException e) {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		} catch (Throwable e) {
 			mosipLogger.error("Exception in connection>>>", e);
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		}
 	}
 
 	private byte[] getObject(String uinHash, boolean isBio, String fileRefId, String refId) throws IdRepoAppException {
-		try {
 		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-		return securityManager.decrypt(IOUtils.toByteArray(
-				objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName)), refId);
-		} catch (AmazonS3Exception | FSAdapterException | IOException e) {
-			throw new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR);
+		try (InputStream objStream = objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName)) {
+			if (objStream == null) {
+				throw new IdRepoAppException(FILE_NOT_FOUND);
+			}
+			byte[] encrypted = IOUtils.toByteArray(objStream);
+			return securityManager.decrypt(encrypted, refId);
+		} catch (FSAdapterException | IOException e) {
+			throw new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR, e);
 		}
 	}
 }
