@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -25,18 +26,18 @@ import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.context.WebApplicationContext;
 
-import com.amazonaws.services.s3.model.AmazonS3Exception;
-
 import io.mosip.commons.khazana.spi.ObjectStoreAdapter;
 import io.mosip.idrepository.core.constant.IdRepoErrorConstants;
 import io.mosip.idrepository.core.exception.IdRepoAppException;
 import io.mosip.idrepository.core.security.IdRepoSecurityManager;
 import io.mosip.idrepository.core.util.EnvUtil;
 import io.mosip.idrepository.identity.helper.ObjectStoreHelper;
+import io.mosip.kernel.core.fsadapter.exception.FSAdapterException;
 
 @ContextConfiguration(classes = { TestContext.class, WebApplicationContext.class })
 @RunWith(SpringRunner.class)
-@WebMvcTest @Import(EnvUtil.class)
+@WebMvcTest
+@Import(EnvUtil.class)
 @ActiveProfiles("test")
 public class ObjectStoreHelperTest {
 
@@ -94,7 +95,7 @@ public class ObjectStoreHelperTest {
 	@Test
 	public void testPutObjectException() throws IdRepoAppException {
 		when(securityManager.encrypt(any(), any())).thenReturn("".getBytes());
-		when(adapter.putObject(any(), any(), any(), any(), any(), any())).thenThrow(new AmazonS3Exception(""));
+		when(adapter.putObject(any(), any(), any(), any(), any(), any())).thenThrow(new FSAdapterException("error",""));
 		try {
 			helper.putDemographicObject("hash", "refId", "".getBytes());
 		} catch (IdRepoAppException e) {
@@ -104,7 +105,7 @@ public class ObjectStoreHelperTest {
 	}
 
 	@Test
-	public void testGetDemographicObject() throws IdRepoAppException {
+	public void testGetDemographicObject() throws IdRepoAppException, IOException {
 		when(adapter.exists(any(), any(), any(), any(), any())).thenReturn(Boolean.TRUE);
 		when(securityManager.decrypt(any(), any())).thenReturn("abc".getBytes());
 		when(adapter.getObject(any(), any(), any(), any(), any()))
@@ -114,7 +115,7 @@ public class ObjectStoreHelperTest {
 	}
 
 	@Test
-	public void testGetBiometricObject() throws IdRepoAppException {
+	public void testGetBiometricObject() throws IdRepoAppException, IOException {
 		when(adapter.exists(any(), any(), any(), any(), any())).thenReturn(Boolean.TRUE);
 		when(securityManager.decrypt(any(), any())).thenReturn("abc".getBytes());
 		when(adapter.getObject(any(), any(), any(), any(), any()))
@@ -146,10 +147,10 @@ public class ObjectStoreHelperTest {
 	}
 
 	@Test
-	public void testGetObjectException() throws IdRepoAppException {
+	public void testGetObjectException() throws IdRepoAppException, IOException {
 		when(adapter.exists(any(), any(), any(), any(), any())).thenReturn(Boolean.TRUE);
 		when(securityManager.encrypt(any(), any())).thenReturn("".getBytes());
-		when(adapter.getObject(any(), any(), any(), any(), any())).thenThrow(new AmazonS3Exception(""));
+		when(adapter.getObject(any(), any(), any(), any(), any())).thenThrow(new FSAdapterException("error",""));
 		try {
 			helper.getDemographicObject("hash", "refId");
 		} catch (IdRepoAppException e) {
@@ -173,5 +174,4 @@ public class ObjectStoreHelperTest {
 		when(adapter.exists(any(), any(), any(), any(), any())).thenReturn(Boolean.FALSE);
 		helper.deleteBiometricObject("hash", "refId");
 	}
-
 }
