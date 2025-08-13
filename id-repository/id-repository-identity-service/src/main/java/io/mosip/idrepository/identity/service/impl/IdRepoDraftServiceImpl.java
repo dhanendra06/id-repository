@@ -103,7 +103,6 @@ import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.DocumentContext;
 import com.jayway.jsonpath.InvalidJsonException;
 import com.jayway.jsonpath.JsonPath;
-import com.jayway.jsonpath.Option;
 /**
  * @author Manoj SP
  *
@@ -548,12 +547,8 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	private void deleteExistingExtractedBioData(Map<String, String> extractionFormats, String uinHash, UinBiometricDraft bioDraft) {
 		extractionFormats.entrySet()
 				.forEach(extractionFormat -> {
-                    try {
-                        super.objectStoreHelper.deleteBiometricObject(uinHash,
-                                buildExtractionFileName(extractionFormat, bioDraft.getBioFileId()));
-                    } catch (IdRepoAppException e) {
-                        throw new RuntimeException(e);
-                    }
+                    super.objectStoreHelper.deleteBiometricObject(uinHash,
+                            buildExtractionFileName(extractionFormat, bioDraft.getBioFileId()));
                 });
 	}
 
