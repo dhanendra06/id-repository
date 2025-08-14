@@ -26,12 +26,10 @@ import io.mosip.idrepository.core.security.IdRepoSecurityManager;
 import io.mosip.kernel.core.fsadapter.exception.FSAdapterException;
 
 /**
- * Optimized helper for object store access (1–4 MB objects).
- * - Drop-in compatible: public method signatures unchanged.
- * - Eliminates redundant exists() before get/delete.
- * - Streams with a reusable buffer to reduce allocations/GC.
- * - Ensures streams/connections are closed promptly.
- * - Adds light timing logs for performance visibility.
+ * Optimized helper for object store access.
+ * - Streams reads/writes internally and closes streams.
+ * - Avoids redundant exists() calls before get/delete.
+ * - Preserves all public method signatures.
  */
 @Component
 public class ObjectStoreHelper {
@@ -58,10 +56,6 @@ public class ObjectStoreHelper {
 	private ObjectStoreAdapter objectStore;
 
 	private final Logger mosipLogger = IdRepoLogger.getLogger(ObjectStoreHelper.class);
-
-	// Reuse a single 64 KiB buffer per thread to cut allocations/GC pressure
-	private static final int READ_BUF_SIZE = 64 * 1024;
-	private static final ThreadLocal<byte[]> TL_BUFFER = ThreadLocal.withInitial(() -> new byte[READ_BUF_SIZE]);
 
 	@Autowired
 	public void setObjectStore(ApplicationContext context) {
@@ -94,23 +88,24 @@ public class ObjectStoreHelper {
 	/* ------------------------ Gets ------------------------ */
 
 	public byte[] getDemographicObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		// Avoid pre-exists() trip; handle not-found from the read path
+		// Avoid pre-exists() network call; just try to read and handle not found.
 		return getObject(uinHash, false, fileRefId, demoDataRefId);
 	}
 
 	public byte[] getBiometricObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		// Avoid pre-exists() trip; handle not-found from the read path
+		// Avoid pre-exists() network call; just try to read and handle not found.
 		return getObject(uinHash, true, fileRefId, bioDataRefId);
 	}
 
 	/* ------------------------ Delete ------------------------ */
 
 	public void deleteBiometricObject(String uinHash, String fileRefId) {
-		final String objectName = buildObjectName(uinHash, true, fileRefId);
+		// One network call; let the adapter/S3 ignore not-found gracefully.
+		String objectName = buildObjectName(uinHash, true, fileRefId);
 		try {
 			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
 		} catch (Throwable t) {
-			// Ignore not-found; log others and continue
+			// Swallow not-found, log others
 			mosipLogger.warn("deleteBiometricObject: delete failed for key {}", objectName, t);
 		}
 	}
@@ -118,7 +113,7 @@ public class ObjectStoreHelper {
 	/* ------------------------ Private core ------------------------ */
 
 	private boolean exists(String uinHash, boolean isBio, String fileRefId) {
-		final String objectName = buildObjectName(uinHash, isBio, fileRefId);
+		String objectName = buildObjectName(uinHash, isBio, fileRefId);
 		try {
 			return objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
 		} catch (Throwable t) {
@@ -130,19 +125,14 @@ public class ObjectStoreHelper {
 	private void putObject(String uinHash, boolean isBio, String fileRefId, byte[] data, String refId)
 			throws IdRepoAppException {
 
-		final String objectName = buildObjectName(uinHash, isBio, fileRefId);
-		final long t0 = System.currentTimeMillis();
+		String objectName = buildObjectName(uinHash, isBio, fileRefId);
 		try {
-			// Encrypt in-memory (API requires byte[]) then stream it out
-			final byte[] encrypted = securityManager.encrypt(data, refId);
-			final long t1 = System.currentTimeMillis();
-
+			// NOTE: API accepts byte[]; we must encrypt to byte[] here.
+			// Use try-with-resources to ensure stream closure on the adapter side.
+			byte[] encrypted = securityManager.encrypt(data, refId);
 			try (InputStream in = new ByteArrayInputStream(encrypted)) {
 				objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName, in);
 			}
-			final long t2 = System.currentTimeMillis();
-			mosipLogger.info("putObject key={} encryptMs={} uploadMs={}",
-						objectName, (t1 - t0), (t2 - t1));
 		} catch (FSAdapterException e) {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		} catch (Throwable e) {
@@ -152,9 +142,7 @@ public class ObjectStoreHelper {
 	}
 
 	private byte[] getObject(String uinHash, boolean isBio, String fileRefId, String refId) throws IdRepoAppException {
-		final String objectName = buildObjectName(uinHash, isBio, fileRefId);
-		final long t0 = System.currentTimeMillis();
-
+		String objectName = buildObjectName(uinHash, isBio, fileRefId);
 		try (InputStream objectStream =
 					 objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName)) {
 
@@ -162,20 +150,17 @@ public class ObjectStoreHelper {
 				throw new IdRepoAppException(FILE_NOT_FOUND);
 			}
 
-			// Read encrypted payload with reusable buffer (no IOUtils extra copies)
+			// Stream into a single growable buffer (avoids IOUtils extra copy).
 			byte[] encrypted = readAll(objectStream);
-			final long t1 = System.currentTimeMillis();
 
-			byte[] plain = securityManager.decrypt(encrypted, refId);
-			final long t2 = System.currentTimeMillis();
-			mosipLogger.info("getObject key={} downloadMs={} decryptMs={}",
-						objectName, (t1 - t0), (t2 - t1));
-			return plain;
+			// Decrypt after read (API expects byte[])
+			return securityManager.decrypt(encrypted, refId);
 
 		} catch (FSAdapterException e) {
 			throw new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR, e);
 		} catch (IdRepoAppException e) {
-			throw e; // FILE_NOT_FOUND passthrough
+			// rethrow FILE_NOT_FOUND as-is
+			throw e;
 		} catch (Throwable e) {
 			mosipLogger.error("getObject: unexpected error for key {}", objectName, e);
 			throw new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR, e);
@@ -189,14 +174,16 @@ public class ObjectStoreHelper {
 	}
 
 	/**
-	 * Efficiently reads an InputStream into a byte[] using a reusable 64 KiB buffer.
+	 * Efficiently reads an InputStream into a byte[] with a reusable 64 KiB buffer.
 	 */
 	private static byte[] readAll(InputStream in) throws Exception {
-		byte[] buf = TL_BUFFER.get();
-		try (ByteArrayOutputStream bos = new ByteArrayOutputStream(1024 * 1024)) { // pre-size ~1MB for 1–4MB typical
-			int n;
-			while ((n = in.read(buf, 0, buf.length)) != -1) {
-				bos.write(buf, 0, n);
+		// 64 KiB buffer gives good throughput without huge heap spikes.
+		final int BUF = 64 * 1024;
+		byte[] buffer = new byte[BUF];
+		try (ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+			int read;
+			while ((read = in.read(buffer, 0, BUF)) != -1) {
+				bos.write(buffer, 0, read);
 			}
 			return bos.toByteArray();
 		}
