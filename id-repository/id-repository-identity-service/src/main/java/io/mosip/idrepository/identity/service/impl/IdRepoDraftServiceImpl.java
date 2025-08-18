@@ -108,7 +108,6 @@ import com.jayway.jsonpath.JsonPath;
  *
  */
 @Service
-@Transactional(rollbackFor = { IdRepoAppException.class, IdRepoAppUncheckedException.class })
 public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoDraftService<IdRequestDTO, IdResponseDTO> {
 
 	private static final Logger idrepoDraftLogger = IdRepoLogger.getLogger(IdRepoDraftServiceImpl.class);
@@ -471,6 +470,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		}
 	}
 
+	@Transactional(readOnly = true)
 	@Override
 	public boolean hasDraft(String regId) throws IdRepoAppException {
 		try {
