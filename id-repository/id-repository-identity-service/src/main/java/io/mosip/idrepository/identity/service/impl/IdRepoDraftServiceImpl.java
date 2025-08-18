@@ -470,7 +470,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		}
 	}
 
-	@Transactional(readOnly = true)
+//	@Transactional(readOnly = true)
 	@Override
 	public boolean hasDraft(String regId) throws IdRepoAppException {
 		try {
