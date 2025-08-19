@@ -78,7 +78,6 @@ public class IdRepoSecurityManagerTest {
 				securityManager.hash("abcd".getBytes()));
 	}
 
-	@Ignore
 	@Test
 	public void testEncrypt()
 			throws IdRepoAppException, JsonParseException, JsonMappingException, JsonProcessingException, IOException {
