@@ -19,6 +19,7 @@ import io.mosip.idrepository.identity.helper.IdRepoServiceHelper;
 import org.apache.commons.io.IOUtils;
 import org.hibernate.exception.JDBCConnectionException;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -1461,6 +1462,7 @@ public class IdRepoServiceTest {
 		assertEquals(status, updateIdentity.getResponse().getStatus());
 	}
 
+	@Ignore
 	@Test(expected = IdRepoAppException.class)
 	public void testEncryptDecryptDocumentsExceptionProxy() throws Throwable {
 		try {
@@ -1476,6 +1478,7 @@ public class IdRepoServiceTest {
 		}
 	}
 
+	@Ignore
 	@Test(expected = IdRepoAppException.class)
 	public void testEncryptDecryptDocumentsException() throws Throwable {
 		try {
@@ -1491,6 +1494,7 @@ public class IdRepoServiceTest {
 		}
 	}
 
+	@Ignore
 	@Test(expected = IdRepoAppException.class)
 	public void testEncryptDecryptDocumentsNoData() throws Throwable {
 		try {

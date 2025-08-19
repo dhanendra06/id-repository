@@ -8,7 +8,6 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.function.IntFunction;
 import java.util.function.ToIntFunction;
 
@@ -46,77 +45,59 @@ import io.mosip.kernel.core.util.HMACUtils2;
 import lombok.NoArgsConstructor;
 
 /**
- * The Class IdRepoSecurityManager - provides security related functionalities
- * such as hashing, encryption and decryption using kernel-cryptomanager and
- * providing user details.
- *
- * @author Manoj SP
+ * Provides security-related functionalities:
+ * - Hashing (with/without salt)
+ * - Encryption/decryption via kernel-cryptomanager
+ * - Caching salt values
+ * - User lookup
  */
 @NoArgsConstructor
 public class IdRepoSecurityManager {
-	
+
 	private static final String RESPONSE = "response";
-
-	private static final String PREPEND_THUMBPRINT = "prependThumbprint";
-
-	private static final String REFERENCE_ID = "referenceId";
-
 	private static final String DATA = "data";
-
+	private static final String REFERENCE_ID = "referenceId";
+	private static final String PREPEND_THUMBPRINT = "prependThumbprint";
+	private static final String APPLICATION_ID = "applicationId";
 	private static final String TIME_STAMP = "timeStamp";
-
-	private static final String APPLICATIONID = "applicationId";
-
 	private static final String STRING = "string";
 
 	public static final String SALT = "SALT";
-
 	public static final String MODULO = "MODULO";
-
 	public static final String ID_HASH = "id_hash";
 
-	/** The mosip logger. */
-	private Logger mosipLogger = IdRepoLogger.getLogger(IdRepoSecurityManager.class);
-
-	/** The Constant ENCRYPT_DECRYPT_DATA. */
 	private static final String ENCRYPT_DECRYPT_DATA = "encryptDecryptData";
-
-	/** The Constant ID_REPO_SECURITY_MANAGER. */
 	private static final String ID_REPO_SECURITY_MANAGER = "IdRepoSecurityManager";
 
-	/** The rest factory. */
+	private final Logger logger = IdRepoLogger.getLogger(IdRepoSecurityManager.class);
+
 	@Autowired
 	private RestRequestBuilder restBuilder;
 
-	/** The rest helper. */
 	private RestHelper restHelper;
 
-	/** The mapper. */
 	@Autowired
 	private ObjectMapper mapper;
-	
+
 	@Autowired
 	private ApplicationContext ctx;
-	
+
 	@Autowired
 	private CacheManager cacheManager;
-	
+
 	public IdRepoSecurityManager(RestHelper restHelper) {
 		this.restHelper = restHelper;
 	}
-	
+
 	@PostConstruct
 	public void init() {
-		if (Objects.isNull(restHelper))
+		if (restHelper == null) {
 			this.restHelper = ctx.getBean(RestHelper.class);
+		}
 	}
 
-	/**
-	 * Hash - provides basic hash.
-	 *
-	 * @param data the identity info
-	 * @return the string
-	 */
+	/* ------------------- Hashing ------------------- */
+
 	public String hash(final byte[] data) {
 		try {
 			return HMACUtils2.digestAsPlainText(data);
@@ -125,13 +106,6 @@ public class IdRepoSecurityManager {
 		}
 	}
 
-	/**
-	 * Hash with salt - provides hash value based on provided salt.
-	 *
-	 * @param data the identity info
-	 * @param salt the salt
-	 * @return the string
-	 */
 	public String hashwithSalt(final byte[] data, final byte[] salt) {
 		try {
 			return HMACUtils2.digestAsPlainTextWithSalt(data, salt);
@@ -140,212 +114,141 @@ public class IdRepoSecurityManager {
 		}
 	}
 
-	/**
-	 * provides the user id.
-	 *
-	 * @return the user
-	 */
+	/* ------------------- User ------------------- */
+
 	public static String getUser() {
-		if (Objects.nonNull(SecurityContextHolder.getContext())
-				&& Objects.nonNull(SecurityContextHolder.getContext().getAuthentication())
-				&& Objects.nonNull(SecurityContextHolder.getContext().getAuthentication().getPrincipal())
-				&& SecurityContextHolder.getContext().getAuthentication().getPrincipal() instanceof UserDetails) {	
-			return ((UserDetails) SecurityContextHolder.getContext().getAuthentication().getPrincipal())
-					.getUsername();
-		} else {
-			return "";
+		if (SecurityContextHolder.getContext() != null
+				&& SecurityContextHolder.getContext().getAuthentication() != null
+				&& SecurityContextHolder.getContext().getAuthentication().getPrincipal() instanceof UserDetails details) {
+			return details.getUsername();
 		}
+		return "";
 	}
 
-	/**
-	 * Encryption of data by making rest call to kernel-cryptomanager.
-	 *
-	 * @param dataToEncrypt the data to encrypt
-	 * @return the byte[]
-	 * @throws IdRepoAppException the id repo app exception
-	 */
+	/* ------------------- Encryption / Decryption ------------------- */
+
 	public byte[] encrypt(final byte[] dataToEncrypt, String refId) throws IdRepoAppException {
-		try {
-			RequestWrapper<ObjectNode> baseRequest = new RequestWrapper<>();
-			baseRequest.setId(STRING);
-			baseRequest.setRequesttime(DateUtils.getUTCCurrentDateTime());
-			baseRequest.setVersion(EnvUtil.getAppVersion());
-			ObjectNode request = new ObjectNode(mapper.getNodeFactory());
-			request.put(APPLICATIONID, EnvUtil.getAppId());
-			request.put(TIME_STAMP, DateUtils.formatDate(new Date(), EnvUtil.getDateTimePattern()));
-			request.put(DATA, CryptoUtil.encodeToURLSafeBase64(dataToEncrypt));
-			request.put(REFERENCE_ID, refId);
-			request.put(PREPEND_THUMBPRINT, EnvUtil.getPrependThumbprintStatus());
-			baseRequest.setRequest(request);
-			return encryptDecryptData(restBuilder.buildRequest(RestServicesConstants.CRYPTO_MANAGER_ENCRYPT,
-					baseRequest, ObjectNode.class));
-		} catch (IdRepoAppException e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SECURITY_MANAGER, ENCRYPT_DECRYPT_DATA,
-					e.getErrorText());
-			throw new IdRepoAppException(ENCRYPTION_DECRYPTION_FAILED, e);
-		}
+		ObjectNode request = mapper.createObjectNode();
+		request.put(APPLICATION_ID, EnvUtil.getAppId());
+		request.put(TIME_STAMP, DateUtils.formatDate(new Date(), EnvUtil.getDateTimePattern()));
+		request.put(DATA, CryptoUtil.encodeToURLSafeBase64(dataToEncrypt));
+		request.put(REFERENCE_ID, refId);
+		request.put(PREPEND_THUMBPRINT, EnvUtil.getPrependThumbprintStatus());
+
+		return callCryptoManager(RestServicesConstants.CRYPTO_MANAGER_ENCRYPT, request);
 	}
 
-	/**
-	 * Encryption of data by making rest call to kernel-cryptomanager with salt.
-	 *
-	 * @param dataToEncrypt the data to encrypt
-	 * @param saltToEncrypt the salt to encrypt
-	 * @return the byte[]
-	 * @throws IdRepoAppException the id repo app exception
-	 */
-	public byte[] encryptWithSalt(final byte[] dataToEncrypt, final byte[] saltToEncrypt, String refId) throws IdRepoAppException {
-		try {
-			RequestWrapper<ObjectNode> baseRequest = new RequestWrapper<>();
-			baseRequest.setId(STRING);
-			baseRequest.setRequesttime(DateUtils.getUTCCurrentDateTime());
-			baseRequest.setVersion(EnvUtil.getAppVersion());
-			ObjectNode request = new ObjectNode(mapper.getNodeFactory());
-			request.put(APPLICATIONID, EnvUtil.getAppId());
-			request.put(TIME_STAMP, DateUtils.formatDate(new Date(), EnvUtil.getDateTimePattern()));
-			request.put(DATA, CryptoUtil.encodeToURLSafeBase64(dataToEncrypt));
-			request.put("salt", CryptoUtil.encodeToURLSafeBase64(saltToEncrypt));
-			request.put(REFERENCE_ID, refId);
-			request.put(PREPEND_THUMBPRINT, EnvUtil.getPrependThumbprintStatus());
-			baseRequest.setRequest(request);
-			return encryptDecryptData(restBuilder.buildRequest(RestServicesConstants.CRYPTO_MANAGER_ENCRYPT,
-					baseRequest, ObjectNode.class));
-		} catch (IdRepoAppException e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SECURITY_MANAGER, ENCRYPT_DECRYPT_DATA,
-					e.getErrorText());
-			throw new IdRepoAppException(ENCRYPTION_DECRYPTION_FAILED, e);
-		}
+	public byte[] encryptWithSalt(final byte[] data, final byte[] salt, String refId) throws IdRepoAppException {
+		ObjectNode request = mapper.createObjectNode();
+		request.put(APPLICATION_ID, EnvUtil.getAppId());
+		request.put(TIME_STAMP, DateUtils.formatDate(new Date(), EnvUtil.getDateTimePattern()));
+		request.put(DATA, CryptoUtil.encodeToURLSafeBase64(data));
+		request.put("salt", CryptoUtil.encodeToURLSafeBase64(salt));
+		request.put(REFERENCE_ID, refId);
+		request.put(PREPEND_THUMBPRINT, EnvUtil.getPrependThumbprintStatus());
+
+		return callCryptoManager(RestServicesConstants.CRYPTO_MANAGER_ENCRYPT, request);
 	}
 
-	/**
-	 * Decryption of data by making rest call to kernel-cryptomanager.
-	 *
-	 * @param dataToDecrypt the data to decrypt
-	 * @return the byte[]
-	 * @throws IdRepoAppException the id repo app exception
-	 */
 	public byte[] decrypt(final byte[] dataToDecrypt, String refId) throws IdRepoAppException {
-		try {
-			RequestWrapper<ObjectNode> baseRequest = new RequestWrapper<>();
-			baseRequest.setId(STRING);
-			baseRequest.setRequesttime(DateUtils.getUTCCurrentDateTime());
-			baseRequest.setVersion(EnvUtil.getAppVersion());
-			ObjectNode request = new ObjectNode(mapper.getNodeFactory());
-			request.put(APPLICATIONID, EnvUtil.getAppId());
-			request.put(REFERENCE_ID, refId);
-			request.put(TIME_STAMP, DateUtils.formatDate(new Date(), EnvUtil.getDateTimePattern()));
-			request.put(DATA, new String(dataToDecrypt));
-			request.put(PREPEND_THUMBPRINT, EnvUtil.getPrependThumbprintStatus());
-			baseRequest.setRequest(request);
-			return CryptoUtil.decodeURLSafeBase64(new String(encryptDecryptData(restBuilder
-					.buildRequest(RestServicesConstants.CRYPTO_MANAGER_DECRYPT, baseRequest, ObjectNode.class))));
-		} catch (IdRepoAppException e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SECURITY_MANAGER, ENCRYPT_DECRYPT_DATA,
-					e.getErrorText());
-			throw new IdRepoAppException(ENCRYPTION_DECRYPTION_FAILED, e);
-		}
+		ObjectNode request = mapper.createObjectNode();
+		request.put(APPLICATION_ID, EnvUtil.getAppId());
+		request.put(REFERENCE_ID, refId);
+		request.put(TIME_STAMP, DateUtils.formatDate(new Date(), EnvUtil.getDateTimePattern()));
+		request.put(DATA, new String(dataToDecrypt)); // already Base64 string
+		request.put(PREPEND_THUMBPRINT, EnvUtil.getPrependThumbprintStatus());
+
+		return callCryptoManager(RestServicesConstants.CRYPTO_MANAGER_DECRYPT, request);
 	}
 
-	/**
-	 * Decryption of data by making rest call to kernel-cryptomanager with salt.
-	 *
-	 * @param dataToDecrypt the data to decrypt
-	 * @param saltToDecrypt the salt to decrypt
-	 * @return the byte[]
-	 * @throws IdRepoAppException the id repo app exception
-	 */
-	public byte[] decryptWithSalt(final byte[] dataToDecrypt, final byte[] saltToDecrypt, String refId) throws IdRepoAppException {
-		try {
-			RequestWrapper<ObjectNode> baseRequest = new RequestWrapper<>();
-			baseRequest.setId(STRING);
-			baseRequest.setRequesttime(DateUtils.getUTCCurrentDateTime());
-			baseRequest.setVersion(EnvUtil.getAppVersion());
-			ObjectNode request = new ObjectNode(mapper.getNodeFactory());
-			request.put(APPLICATIONID, EnvUtil.getAppId());
-			request.put(REFERENCE_ID, refId);
-			request.put(TIME_STAMP, DateUtils.formatDate(new Date(), EnvUtil.getDateTimePattern()));
-			request.put(DATA, CryptoUtil.encodeToURLSafeBase64(dataToDecrypt));
-			request.put("salt", CryptoUtil.encodeToURLSafeBase64(saltToDecrypt));
-			request.put(PREPEND_THUMBPRINT, EnvUtil.getPrependThumbprintStatus());
-			baseRequest.setRequest(request);
-			return CryptoUtil.decodeURLSafeBase64(new String(encryptDecryptData(restBuilder
-					.buildRequest(RestServicesConstants.CRYPTO_MANAGER_DECRYPT, baseRequest, ObjectNode.class))));
-		} catch (IdRepoAppException e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SECURITY_MANAGER, ENCRYPT_DECRYPT_DATA,
-					e.getErrorText());
-			throw new IdRepoAppException(ENCRYPTION_DECRYPTION_FAILED, e);
-		}
+	public byte[] decryptWithSalt(final byte[] data, final byte[] salt, String refId) throws IdRepoAppException {
+		ObjectNode request = mapper.createObjectNode();
+		request.put(APPLICATION_ID, EnvUtil.getAppId());
+		request.put(REFERENCE_ID, refId);
+		request.put(TIME_STAMP, DateUtils.formatDate(new Date(), EnvUtil.getDateTimePattern()));
+		request.put(DATA, CryptoUtil.encodeToURLSafeBase64(data));
+		request.put("salt", CryptoUtil.encodeToURLSafeBase64(salt));
+		request.put(PREPEND_THUMBPRINT, EnvUtil.getPrependThumbprintStatus());
+
+		return callCryptoManager(RestServicesConstants.CRYPTO_MANAGER_DECRYPT, request);
 	}
 
-	/**
-	 * Rest calls is made to kernel-cryptomanager and required data from response is
-	 * extracted and handled.
-	 *
-	 * @param restRequest the rest request
-	 * @return the byte[]
-	 * @throws IdRepoAppException the id repo app exception
-	 */
-	private byte[] encryptDecryptData(final RestRequestDTO restRequest) throws IdRepoAppException {
+	private byte[] callCryptoManager(RestServicesConstants service, ObjectNode requestNode) throws IdRepoAppException {
 		try {
+			RequestWrapper<ObjectNode> wrapper = new RequestWrapper<>();
+			wrapper.setId(STRING);
+			wrapper.setRequesttime(DateUtils.getUTCCurrentDateTime());
+			wrapper.setVersion(EnvUtil.getAppVersion());
+			wrapper.setRequest(requestNode);
+
+			RestRequestDTO restRequest = restBuilder.buildRequest(service, wrapper, ObjectNode.class);
 			ObjectNode response = restHelper.requestSync(restRequest);
 
-			if (response.has(RESPONSE) && Objects.nonNull(response.get(RESPONSE))
-					&& response.get(RESPONSE).has(DATA) && Objects.nonNull(response.get(RESPONSE).get(DATA))) {
-				return response.get(RESPONSE).get(DATA).asText().getBytes();
-			} else {
-				mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SECURITY_MANAGER, ENCRYPT_DECRYPT_DATA,
-						"No data block found in response");
-				throw new IdRepoAppException(ENCRYPTION_DECRYPTION_FAILED);
+			if (response.has(RESPONSE) && response.get(RESPONSE).has(DATA)) {
+				String encoded = response.get(RESPONSE).get(DATA).asText();
+				return CryptoUtil.decodeURLSafeBase64(encoded);
 			}
-		} catch (RestServiceException e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SECURITY_MANAGER, ENCRYPT_DECRYPT_DATA,
-					ExceptionUtils.getStackTrace(e));
+			logger.error(getUser(), ID_REPO_SECURITY_MANAGER, ENCRYPT_DECRYPT_DATA, "No data block in response");
 			throw new IdRepoAppException(ENCRYPTION_DECRYPTION_FAILED);
+
+		} catch (RestServiceException e) {
+			logger.error(getUser(), ID_REPO_SECURITY_MANAGER, ENCRYPT_DECRYPT_DATA,
+					ExceptionUtils.getStackTrace(e));
+			throw new IdRepoAppException(ENCRYPTION_DECRYPTION_FAILED, e);
 		}
 	}
-	
-	public String getIdHash(String uin, IntFunction<String> saltRetreivalFunction) {
-		return getIdHashAndAttributes(uin, saltRetreivalFunction).get(ID_HASH);
-	}
-	
-	public String getIdHashWithSaltModuloByPlainIdHash(String uin, IntFunction<String> saltRetreivalFunction) {
-		return getIdHashAndAttributesWithSaltModuloByPlainIdHash(uin, saltRetreivalFunction).get(ID_HASH);
-	}
-	
-	@Cacheable(cacheNames = "id_attributes")
-	public Map<String, String> getIdHashAndAttributes(String id, IntFunction<String> saltRetreivalFunction) {
-		return getIdHashAndAttributes(id, saltRetreivalFunction, this::getSaltKeyForId);
+
+	/* ------------------- Salt & Hash Attributes ------------------- */
+
+	public String getIdHash(String uin, IntFunction<String> saltRetrieval) {
+		return getIdHashAndAttributes(uin, saltRetrieval).get(ID_HASH);
 	}
 
-	public Map<String, String> getIdHashAndAttributesWithSaltModuloByPlainIdHash(String id, IntFunction<String> saltRetreivalFunction) {
-		return getIdHashAndAttributes(id, saltRetreivalFunction, this::getSaltKeyForHashOfId);
+	public String getIdHashWithSaltModuloByPlainIdHash(String uin, IntFunction<String> saltRetrieval) {
+		return getIdHashAndAttributesWithSaltModuloByPlainIdHash(uin, saltRetrieval).get(ID_HASH);
 	}
-	
-	public Map<String, String> getIdHashAndAttributes(String id, IntFunction<String> saltRetreivalFunction, ToIntFunction<String> saltIdFunction) {
-		Map<String, String> hashWithAttributes = new HashMap<>();
+
+	@Cacheable(cacheNames = "id_attributes")
+	public Map<String, String> getIdHashAndAttributes(String id, IntFunction<String> saltRetrieval) {
+		return getIdHashAndAttributes(id, saltRetrieval, this::getSaltKeyForId);
+	}
+
+	public Map<String, String> getIdHashAndAttributesWithSaltModuloByPlainIdHash(
+			String id, IntFunction<String> saltRetrieval) {
+		return getIdHashAndAttributes(id, saltRetrieval, this::getSaltKeyForHashOfId);
+	}
+
+	private Map<String, String> getIdHashAndAttributes(
+			String id, IntFunction<String> saltRetrieval, ToIntFunction<String> saltIdFunction) {
 		int saltId = saltIdFunction.applyAsInt(id);
-		String hashSalt = saltRetreivalFunction.apply(saltId);
+		String hashSalt = saltRetrieval.apply(saltId);
 		String hash = hashwithSalt(id.getBytes(), hashSalt.getBytes());
-		hashWithAttributes.put(ID_HASH, hash);
-		hashWithAttributes.put(MODULO, String.valueOf(saltId));
-		hashWithAttributes.put(SALT, hashSalt);
-		return hashWithAttributes;
+
+		Map<String, String> attributes = new HashMap<>();
+		attributes.put(ID_HASH, hash);
+		attributes.put(MODULO, String.valueOf(saltId));
+		attributes.put(SALT, hashSalt);
+		return attributes;
 	}
 
 	public int getSaltKeyForId(String id) {
-		Integer saltKeyLength = EnvUtil.getIdrepoSaltKeyLength();
-		return SaltUtil.getIdvidModulo(id, saltKeyLength);
+		return SaltUtil.getIdvidModulo(id, EnvUtil.getIdrepoSaltKeyLength());
 	}
-	
+
 	public int getSaltKeyForHashOfId(String id) {
-		Integer saltKeyLength = EnvUtil.getIdrepoSaltKeyLength();
-		return SaltUtil.getIdvidHashModulo(id, saltKeyLength);
+		return SaltUtil.getIdvidHashModulo(id, EnvUtil.getIdrepoSaltKeyLength());
 	}
-	
-	@Scheduled(initialDelayString = "${" + IDREPO_CACHE_UPDATE_INTERVAL + ":" + CACHE_UPDATE_DEFAULT_INTERVAL + "}", fixedDelayString = "${" + IDREPO_CACHE_UPDATE_INTERVAL + ":" + CACHE_UPDATE_DEFAULT_INTERVAL + "}")
+
+	/* ------------------- Cache Eviction ------------------- */
+
+	@Scheduled(
+			initialDelayString = "${" + IDREPO_CACHE_UPDATE_INTERVAL + ":" + CACHE_UPDATE_DEFAULT_INTERVAL + "}",
+			fixedDelayString = "${" + IDREPO_CACHE_UPDATE_INTERVAL + ":" + CACHE_UPDATE_DEFAULT_INTERVAL + "}"
+	)
 	public void evictIdAttributeCacheAtInterval() {
-		Cache idAttrCache = cacheManager.getCache("id_attributes");
-		if (Objects.nonNull(idAttrCache))
-			idAttrCache.clear();
+		Cache cache = cacheManager.getCache("id_attributes");
+		if (cache != null) {
+			cache.clear();
+		}
 	}
 }

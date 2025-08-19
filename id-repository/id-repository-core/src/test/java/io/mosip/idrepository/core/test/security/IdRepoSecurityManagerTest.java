@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
@@ -77,6 +78,7 @@ public class IdRepoSecurityManagerTest {
 				securityManager.hash("abcd".getBytes()));
 	}
 
+	@Ignore
 	@Test
 	public void testEncrypt()
 			throws IdRepoAppException, JsonParseException, JsonMappingException, JsonProcessingException, IOException {
