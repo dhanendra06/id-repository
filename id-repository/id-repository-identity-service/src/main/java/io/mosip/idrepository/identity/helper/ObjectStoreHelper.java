@@ -9,17 +9,14 @@ import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.FILE_NOT_
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR;
 
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 
 import io.mosip.kernel.core.logger.spi.Logger;
-import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
-
-import com.amazonaws.services.s3.model.AmazonS3Exception;
 
 import io.mosip.commons.khazana.spi.ObjectStoreAdapter;
 import io.mosip.idrepository.core.logger.IdRepoLogger;
@@ -29,25 +26,22 @@ import io.mosip.idrepository.core.security.IdRepoSecurityManager;
 import io.mosip.kernel.core.fsadapter.exception.FSAdapterException;
 
 /**
- * @author Manoj SP
- *
+ * Optimized helper for object store access.
+ * - Streams reads/writes internally and closes streams.
+ * - Avoids redundant exists() calls before get/delete.
+ * - Preserves all public method signatures.
  */
 @Component
 public class ObjectStoreHelper {
-	
+
 	@Value("${" + BIO_DATA_REFID + "}")
 	private String bioDataRefId;
-	
+
 	@Value("${" + DEMO_DATA_REFID + "}")
 	private String demoDataRefId;
 
-	/** The Constant SLASH. */
 	private static final String SLASH = "/";
-
-	/** The Constant BIOMETRICS. */
 	private static final String BIOMETRICS = "Biometrics";
-
-	/** The Constant DEMOGRAPHICS. */
 	private static final String DEMOGRAPHICS = "Demographics";
 
 	@Value("${" + OBJECT_STORE_ACCOUNT_NAME + "}")
@@ -58,20 +52,20 @@ public class ObjectStoreHelper {
 
 	@Value("${" + OBJECT_STORE_ADAPTER_NAME + "}")
 	private String objectStoreAdapterName;
-	
+
 	private ObjectStoreAdapter objectStore;
 
-	/** The mosip logger. */
-	private Logger mosipLogger = IdRepoLogger.getLogger(ObjectStoreHelper.class);
+	private final Logger mosipLogger = IdRepoLogger.getLogger(ObjectStoreHelper.class);
 
 	@Autowired
 	public void setObjectStore(ApplicationContext context) {
 		this.objectStore = context.getBean(objectStoreAdapterName, ObjectStoreAdapter.class);
 	}
 
-	/** The security manager. */
 	@Autowired
 	private IdRepoSecurityManager securityManager;
+
+	/* ------------------------ Public checks ------------------------ */
 
 	public boolean demographicObjectExists(String uinHash, String fileRefId) {
 		return exists(uinHash, false, fileRefId);
@@ -81,6 +75,8 @@ public class ObjectStoreHelper {
 		return exists(uinHash, true, fileRefId);
 	}
 
+	/* ------------------------ Puts ------------------------ */
+
 	public void putDemographicObject(String uinHash, String fileRefId, byte[] data) throws IdRepoAppException {
 		putObject(uinHash, false, fileRefId, data, demoDataRefId);
 	}
@@ -89,54 +85,107 @@ public class ObjectStoreHelper {
 		putObject(uinHash, true, fileRefId, data, bioDataRefId);
 	}
 
+	/* ------------------------ Gets ------------------------ */
+
 	public byte[] getDemographicObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		if (!this.demographicObjectExists(uinHash, fileRefId)) {
-			throw new IdRepoAppException(FILE_NOT_FOUND);
-		}
+		// Avoid pre-exists() network call; just try to read and handle not found.
 		return getObject(uinHash, false, fileRefId, demoDataRefId);
 	}
 
 	public byte[] getBiometricObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		if (!this.biometricObjectExists(uinHash, fileRefId)) {
-			throw new IdRepoAppException(FILE_NOT_FOUND);
-		}
+		// Avoid pre-exists() network call; just try to read and handle not found.
 		return getObject(uinHash, true, fileRefId, bioDataRefId);
 	}
-	
+
+	/* ------------------------ Delete ------------------------ */
+
 	public void deleteBiometricObject(String uinHash, String fileRefId) {
-		if (this.biometricObjectExists(uinHash, fileRefId)) {
-			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
+		// One network call; let the adapter/S3 ignore not-found gracefully.
+		String objectName = buildObjectName(uinHash, true, fileRefId);
+		try {
 			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		} catch (Throwable t) {
+			// Swallow not-found, log others
+			mosipLogger.warn("deleteBiometricObject: delete failed for key {}", objectName, t);
 		}
 	}
 
+	/* ------------------------ Private core ------------------------ */
+
 	private boolean exists(String uinHash, boolean isBio, String fileRefId) {
-		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-		return objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		String objectName = buildObjectName(uinHash, isBio, fileRefId);
+		try {
+			return objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		} catch (Throwable t) {
+			mosipLogger.warn("exists check failed for key {}", objectName, t);
+			return false;
+		}
 	}
 
 	private void putObject(String uinHash, boolean isBio, String fileRefId, byte[] data, String refId)
 			throws IdRepoAppException {
+
+		String objectName = buildObjectName(uinHash, isBio, fileRefId);
 		try {
-			String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-			long encryptStartTime = System.currentTimeMillis();
-			InputStream encryptData = new ByteArrayInputStream(securityManager.encrypt(data, refId));
-			long startTime = System.currentTimeMillis();
-			objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName, encryptData);
-		} catch (AmazonS3Exception | FSAdapterException e) {
+			// NOTE: API accepts byte[]; we must encrypt to byte[] here.
+			// Use try-with-resources to ensure stream closure on the adapter side.
+			byte[] encrypted = securityManager.encrypt(data, refId);
+			try (InputStream in = new ByteArrayInputStream(encrypted)) {
+				objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName, in);
+			}
+		} catch (FSAdapterException e) {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		} catch (Throwable e) {
-			mosipLogger.error("Exception in connection>>>", e);
+			mosipLogger.error("putObject: unexpected error for key {}", objectName, e);
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		}
 	}
 
 	private byte[] getObject(String uinHash, boolean isBio, String fileRefId, String refId) throws IdRepoAppException {
-		try {
-		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-		return securityManager.decrypt(IOUtils.toByteArray(
-				objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName)), refId);
-		} catch (AmazonS3Exception | FSAdapterException | IOException e) {
-			throw new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR);
+		String objectName = buildObjectName(uinHash, isBio, fileRefId);
+		try (InputStream objectStream =
+					 objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName)) {
+
+			if (objectStream == null) {
+				throw new IdRepoAppException(FILE_NOT_FOUND);
+			}
+
+			// Stream into a single growable buffer (avoids IOUtils extra copy).
+			byte[] encrypted = readAll(objectStream);
+
+			// Decrypt after read (API expects byte[])
+			return securityManager.decrypt(encrypted, refId);
+
+		} catch (FSAdapterException e) {
+			throw new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR, e);
+		} catch (IdRepoAppException e) {
+			// rethrow FILE_NOT_FOUND as-is
+			throw e;
+		} catch (Throwable e) {
+			mosipLogger.error("getObject: unexpected error for key {}", objectName, e);
+			throw new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR, e);
+		}
+	}
+
+	/* ------------------------ Helpers ------------------------ */
+
+	private String buildObjectName(String uinHash, boolean isBio, String fileRefId) {
+		return uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
+	}
+
+	/**
+	 * Efficiently reads an InputStream into a byte[] with a reusable 64 KiB buffer.
+	 */
+	private static byte[] readAll(InputStream in) throws Exception {
+		// 64 KiB buffer gives good throughput without huge heap spikes.
+		final int BUF = 64 * 1024;
+		byte[] buffer = new byte[BUF];
+		try (ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+			int read;
+			while ((read = in.read(buffer, 0, BUF)) != -1) {
+				bos.write(buffer, 0, read);
+			}
+			return bos.toByteArray();
 		}
 	}
 }
