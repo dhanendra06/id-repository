@@ -1,6 +1,8 @@
 package io.mosip.idrepository.core.helper;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -24,83 +26,77 @@ import io.mosip.kernel.core.http.RequestWrapper;
 import io.mosip.kernel.core.logger.spi.Logger;
 
 /**
- * The Class AuditHelper - helper class that makes async rest call to audit
- * service with provided audit details .
- *
- * @author Manoj SP
+ * Asynchronous Audit Helper for IdRepo.
+ * Sends audit events to the audit service without blocking main processing.
  */
 @Component
 public class AuditHelper {
 
-	/** The mosipLogger. */
-	private static Logger mosipLogger = IdRepoLogger.getLogger(AuditHelper.class);
+	/** Logger */
+	private static final Logger mosipLogger = IdRepoLogger.getLogger(AuditHelper.class);
 
-	/** The rest helper. */
+	/** Rest helper */
 	@Autowired
+	@Qualifier("withSelfTokenWebclient") // Use async-enabled RestHelper if available
 	private RestHelper restHelper;
 
-	/** The audit factory. */
+	/** Builders */
 	@Autowired
 	private AuditRequestBuilder auditBuilder;
 
-	/** The rest factory. */
 	@Autowired
 	private RestRequestBuilder restBuilder;
-	
-	/** The security manager. */
+
 	@Autowired
 	private IdRepoSecurityManager securityManager;
-	
-	/** The mapper. */
+
 	@Autowired
 	private ObjectMapper mapper;
 
 	/**
-	 * Audit - method to call audit service and store audit details.
-	 *
-	 * @param module the module
-	 * @param event  the event
-	 * @param id     the id
-	 * @param idType the id type
-	 * @param desc   the desc
+	 * Send audit asynchronously.
 	 */
+	@Async("auditExecutor") // Optional: use dedicated executor if configured
 	public void audit(AuditModules module, AuditEvents event, String id, IdType idType, String desc) {
-		String requestId = null;
-		if(id !=null) {
-			requestId = securityManager.hash(id.getBytes());
-		}
-		RequestWrapper<AuditRequestDTO> auditRequest = auditBuilder.buildRequest(module, event,
-				requestId, idType, desc);
-		RestRequestDTO restRequest;
 		try {
-			restRequest = restBuilder.buildRequest(RestServicesConstants.AUDIT_MANAGER_SERVICE, auditRequest,
-					AuditResponseDTO.class);
-			restHelper.requestSync(restRequest);
+			String requestId = (id != null) ? securityManager.hash(id.getBytes()) : null;
+
+			RequestWrapper<AuditRequestDTO> auditRequest = auditBuilder.buildRequest(
+					module, event, requestId, idType, desc);
+
+			RestRequestDTO restRequest = restBuilder.buildRequest(
+					RestServicesConstants.AUDIT_MANAGER_SERVICE,
+					auditRequest,
+					AuditResponseDTO.class
+			);
+
+			restHelper.requestAsync(restRequest)
+					.exceptionally(ex -> {
+						mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditHelper", "audit",
+								"Async audit failed: " + ExceptionUtils.getStackTrace(ex));
+						return null;
+					});
+
 		} catch (IdRepoDataValidationException e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditRequestBuilder", "audit",
-					"Exception : " + ExceptionUtils.getStackTrace(e));
+			mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditHelper", "audit",
+					"Validation exception: " + ExceptionUtils.getStackTrace(e));
 		} catch (Exception e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditRequestBuilder", "audit",
-					"Exception : " + ExceptionUtils.getStackTrace(e));
-		}
-	}
-	
-	/**
-	 * Audit error.
-	 *
-	 * @param module the module
-	 * @param event the event
-	 * @param id the id
-	 * @param idType the id type
-	 * @param e the e
-	 */
-	public void auditError(AuditModules module, AuditEvents event, String id, IdType idType, Throwable e) {
-		try {
-			this.audit(module, event, id, idType, mapper.writeValueAsString(IdRepoExceptionHandler.getAllErrors(e)));
-		} catch (JsonProcessingException ex) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditRequestBuilder", "auditError",
-					"Exception : " + ExceptionUtils.getStackTrace(ex));
+			mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditHelper", "audit",
+					"Unexpected exception: " + ExceptionUtils.getStackTrace(e));
 		}
 	}
 
+	/**
+	 * Audit error scenarios asynchronously.
+	 */
+	@Async("auditExecutor")
+	public void auditError(AuditModules module, AuditEvents event, String id, IdType idType, Throwable e) {
+		try {
+			String errorDetails = mapper.writeValueAsString(IdRepoExceptionHandler.getAllErrors(e));
+			this.audit(module, event, id, idType, errorDetails);
+		} catch (JsonProcessingException ex) {
+			mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditHelper", "auditError",
+					"Failed to serialize error details: " + ExceptionUtils.getStackTrace(ex));
+		}
+	}
 }

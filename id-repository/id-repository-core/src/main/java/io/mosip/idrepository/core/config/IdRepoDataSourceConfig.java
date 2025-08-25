@@ -3,6 +3,7 @@ package io.mosip.idrepository.core.config;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
@@ -35,6 +36,7 @@ import io.mosip.idrepository.core.repository.HandleRepo;
 import io.mosip.idrepository.core.repository.UinEncryptSaltRepo;
 import io.mosip.idrepository.core.repository.UinHashSaltRepo;
 import io.mosip.idrepository.core.util.EnvUtil;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 @EnableAsync
 @EnableJpaRepositories(basePackageClasses = { UinHashSaltRepo.class, UinEncryptSaltRepo.class,
@@ -141,6 +143,17 @@ public class IdRepoDataSourceConfig {
 	public RestRequestBuilder getRestRequestBuilder() {
 		return new RestRequestBuilder(Arrays.stream(RestServicesConstants.values())
 				.map(RestServicesConstants::getServiceName).collect(Collectors.toList()));
+	}
+
+	@Bean(name = "auditExecutor")
+	public Executor auditExecutor() {
+		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+		executor.setCorePoolSize(8);
+		executor.setMaxPoolSize(16);
+		executor.setQueueCapacity(100);
+		executor.setThreadNamePrefix("Audit-Async-");
+		executor.initialize();
+		return executor;
 	}
 	
 	
