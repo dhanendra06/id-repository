@@ -37,7 +37,6 @@ public class AuditHelper {
 
 	/** Rest helper */
 	@Autowired
-	@Qualifier("withSelfTokenWebclient") // Use async-enabled RestHelper if available
 	private RestHelper restHelper;
 
 	/** Builders */
