@@ -59,6 +59,8 @@ public class ObjectStoreHelperTest {
 		ReflectionTestUtils.setField(helper, "bioDataRefId", "bioRefId");
 		ReflectionTestUtils.setField(helper, "demoDataRefId", "demoRefId");
 		ReflectionTestUtils.setField(helper, "chunkSize", 2);
+		ReflectionTestUtils.setField(helper, "maxRetry", 10);
+
 		when(adapter.exists(any(String.class), any(String.class), any(), any(), any(String.class)))
 				.thenReturn(Boolean.TRUE);
 		ApplicationContext ctxMock = mock(ApplicationContext.class);

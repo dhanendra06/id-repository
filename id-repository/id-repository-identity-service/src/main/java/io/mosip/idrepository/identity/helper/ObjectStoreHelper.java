@@ -1,15 +1,28 @@
 package io.mosip.idrepository.identity.helper;
 
-import static io.mosip.idrepository.core.constant.IdRepoConstants.*;
-import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.*;
+import static io.mosip.idrepository.core.constant.IdRepoConstants.BIO_DATA_REFID;
+import static io.mosip.idrepository.core.constant.IdRepoConstants.DEMO_DATA_REFID;
+import static io.mosip.idrepository.core.constant.IdRepoConstants.OBJECT_STORE_ACCOUNT_NAME;
+import static io.mosip.idrepository.core.constant.IdRepoConstants.OBJECT_STORE_ADAPTER_NAME;
+import static io.mosip.idrepository.core.constant.IdRepoConstants.OBJECT_STORE_BUCKET_NAME;
+import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.FILE_NOT_FOUND;
+import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR;
 
-import java.io.*;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.IOException;
 import java.util.Arrays;
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Future;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
+
 import io.mosip.commons.khazana.exception.ObjectStoreAdapterException;
 import io.mosip.commons.khazana.spi.ObjectStoreAdapter;
 import io.mosip.idrepository.core.exception.IdRepoAppException;
@@ -20,32 +33,42 @@ import io.mosip.kernel.core.exception.ExceptionUtils;
 
 @Component
 public class ObjectStoreHelper {
+
 	@Value("${" + BIO_DATA_REFID + "}")
 	private String bioDataRefId;
+
 	@Value("${" + DEMO_DATA_REFID + "}")
 	private String demoDataRefId;
-	@Value("${" + OBJECT_STORE_ACCOUNT_NAME + "}")
-	private String objectStoreAccountName;
-	@Value("${" + OBJECT_STORE_BUCKET_NAME + "}")
-	private String objectStoreBucketName;
-	@Value("${" + OBJECT_STORE_ADAPTER_NAME + "}")
-	private String objectStoreAdapterName;
-	@Value("${object.store.connection.max.retry:10}")
-	private int maxRetry;
-	@Value("${object.store.chunk.size:1048576}")
-	private int chunkSize; // Default: 1MB
-	@Value("${object.store.operation.timeout:10000}")
-	private int operationTimeout;
 
 	private static final String SLASH = "/";
 	private static final String BIOMETRICS = "Biometrics";
 	private static final String DEMOGRAPHICS = "Demographics";
 
-	private ObjectStoreAdapter objectStore;
-	private final Logger mosipLogger = IdRepoLogger.getLogger(ObjectStoreHelper.class);
+	@Value("${" + OBJECT_STORE_ACCOUNT_NAME + "}")
+	private String objectStoreAccountName;
+
+	@Value("${" + OBJECT_STORE_BUCKET_NAME + "}")
+	private String objectStoreBucketName;
+
+	@Value("${" + OBJECT_STORE_ADAPTER_NAME + "}")
+	private String objectStoreAdapterName;
+
+	@Value("${object.store.connection.max.retry:10}")
+	private int maxRetry;
+
+	@Value("${object.store.chunk.size:1048576}")
+	private int chunkSize;
+
+	@Value("${object.store.operation.timeout:10000}")
+	private int operationTimeout;
+
+	// Reuse thread pool for chunk crypto
 	private final ExecutorService cryptoPool = Executors.newFixedThreadPool(
 			Math.max(2, Runtime.getRuntime().availableProcessors())
 	);
+
+	private ObjectStoreAdapter objectStore;
+	private final Logger mosipLogger = IdRepoLogger.getLogger(ObjectStoreHelper.class);
 
 	@Autowired
 	public void setObjectStore(ApplicationContext context) {
@@ -89,17 +112,18 @@ public class ObjectStoreHelper {
 		if (biometricObjectExists(uinHash, fileRefId)) {
 			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
 			mosipLogger.info("Attempting to delete biometric object: " + objectName);
-			retry(() -> objectStore.deleteObject(
-					objectStoreAccountName, objectStoreBucketName, null, null, objectName
-			));
+			retry(() -> objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName));
 			mosipLogger.info("Successfully deleted biometric object: " + objectName);
 		}
 	}
 
 	private boolean exists(String uinHash, boolean isBio, String fileRefId) throws IdRepoAppException {
 		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
+		mosipLogger.debug("Checking existence of object: {}", objectName);
 		try {
-			return retry(() -> objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName));
+			boolean exists = retry(() -> objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName));
+			mosipLogger.debug("Object exists check for {}: {}", objectName, exists);
+			return exists;
 		} catch (ObjectStoreAdapterException e) {
 			mosipLogger.error("ObjectStoreAdapterException during exists check for: " + objectName, ExceptionUtils.getStackTrace(e));
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
@@ -113,85 +137,114 @@ public class ObjectStoreHelper {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(), "Input data is null or empty");
 		}
 		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
+		mosipLogger.info("Putting object: {}", objectName);
 		try {
+			long encryptStart = System.currentTimeMillis();
+
+			// Parallel chunk encryption
 			int totalChunks = (data.length + chunkSize - 1) / chunkSize;
 			Future<byte[]>[] futures = new Future[totalChunks];
 			for (int i = 0; i < totalChunks; i++) {
-				int start = i * chunkSize;
-				int end = Math.min(data.length, (i + 1) * chunkSize);
-				byte[] chunk = Arrays.copyOfRange(data, start, end);
+				int chunkStart = i * chunkSize;
+				int chunkEnd = Math.min(chunkStart + chunkSize, data.length);
+				byte[] chunk = Arrays.copyOfRange(data, chunkStart, chunkEnd);
+				final int idx = i;
 				futures[i] = cryptoPool.submit(() -> securityManager.encrypt(chunk, refId));
 			}
 			ByteArrayOutputStream encryptedStream = new ByteArrayOutputStream(data.length);
 			for (int i = 0; i < totalChunks; i++) {
 				encryptedStream.write(futures[i].get());
 			}
+			mosipLogger.debug("Encryption & parallelization time for {}: {} ms", objectName, (System.currentTimeMillis() - encryptStart));
+
 			try (InputStream encryptData = new ByteArrayInputStream(encryptedStream.toByteArray())) {
 				retry(() -> objectStore.putObject(
 						objectStoreAccountName, objectStoreBucketName, null, null, objectName, encryptData));
 			}
+			mosipLogger.info("Successfully put object: {}", objectName);
 		} catch (IOException e) {
+			mosipLogger.error("IOException during putObject for: {}", objectName, ExceptionUtils.getStackTrace(e));
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		} catch (ObjectStoreAdapterException e) {
+			mosipLogger.error("ObjectStoreAdapterException during putObject for: {}", objectName, ExceptionUtils.getStackTrace(e));
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
 					"S3 error: " + e.getErrorCode(), e);
 		} catch (Exception e) {
+			mosipLogger.error("Unexpected exception during putObject for: {}", objectName, ExceptionUtils.getStackTrace(e));
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		}
 	}
 
 	private byte[] getObject(String uinHash, boolean isBio, String fileRefId, String refId) throws IdRepoAppException {
 		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-		try (InputStream s3Stream = retry(() -> objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName))) {
+		mosipLogger.info("Getting object: {}", objectName);
+		try (InputStream s3Stream = retry(() -> objectStore.getObject(
+				objectStoreAccountName, objectStoreBucketName, null, null, objectName))) {
 			if (s3Stream == null) {
+				mosipLogger.error("Object not found: {}", objectName);
 				throw new IdRepoAppException(FILE_NOT_FOUND);
 			}
+			long decryptStart = System.currentTimeMillis();
+			ByteArrayOutputStream decryptedStream = new ByteArrayOutputStream();
+
+			// Read all encrypted data and chunk for parallel decryption
 			byte[][] encryptedChunks = readAllChunks(s3Stream, chunkSize);
-			int chunkNum = encryptedChunks.length;
-			Future<byte[]>[] futures = new Future[chunkNum];
-			for (int i = 0; i < chunkNum; i++) {
+			Future<byte[]>[] futures = new Future[encryptedChunks.length];
+			for (int i = 0; i < encryptedChunks.length; i++) {
 				final int idx = i;
 				futures[i] = cryptoPool.submit(() -> securityManager.decrypt(encryptedChunks[idx], refId));
 			}
-			ByteArrayOutputStream decryptedStream = new ByteArrayOutputStream();
 			for (Future<byte[]> future : futures) {
 				decryptedStream.write(future.get());
 			}
+			mosipLogger.debug("Decryption & parallelization time for {}: {} ms", objectName, (System.currentTimeMillis() - decryptStart));
 			return decryptedStream.toByteArray();
 		} catch (IOException e) {
+			mosipLogger.error("IOException during getObject for: {}", objectName, ExceptionUtils.getStackTrace(e));
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		} catch (ObjectStoreAdapterException e) {
+			mosipLogger.error("ObjectStoreAdapterException during getObject for: {}", objectName, ExceptionUtils.getStackTrace(e));
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(), "S3 error: " + e.getErrorCode(), e);
 		} catch (Exception e) {
+			mosipLogger.error("Unexpected exception during getObject for: {}", objectName, ExceptionUtils.getStackTrace(e));
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR, e);
 		}
 	}
 
-	// Reads stream as N chunks, returns byte[][]
+	// Utility to chunk an InputStream efficiently (without holding a huge buffer)
 	private byte[][] readAllChunks(InputStream is, int chunkSize) throws IOException {
-		byte[][] temp = new byte[16][];
-		int count = 0;
-		byte[] buffer = new byte[chunkSize];
+		ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+		byte[] chunk = new byte[chunkSize];
 		int read;
-		while ((read = is.read(buffer)) != -1) {
-			if (count == temp.length) temp = Arrays.copyOf(temp, temp.length * 2);
-			temp[count++] = Arrays.copyOf(buffer, read);
+		int count = 0;
+		byte[][] temp = new byte[16][];
+		while ((read = is.read(chunk)) != -1) {
+			if (count == temp.length) {
+				temp = Arrays.copyOf(temp, temp.length * 2); // Grow as needed
+			}
+			temp[count++] = Arrays.copyOf(chunk, read);
 		}
 		return Arrays.copyOf(temp, count);
 	}
 
+	// Retried execution with exponential backoff
 	private <T> T retry(Callable<T> operation) throws IdRepoAppException {
 		for (int attempt = 1; attempt <= maxRetry; attempt++) {
 			try {
 				return operation.call();
 			} catch (Exception e) {
+				mosipLogger.warn(
+						"Error during object store operation attempt {} for bucket {}: {}",
+						attempt, objectStoreBucketName, ExceptionUtils.getStackTrace(e));
 				if (attempt == maxRetry) {
 					throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
 							"Operation failed after " + maxRetry + " attempts", e);
 				}
-				try { Thread.sleep(200L * attempt); } catch (InterruptedException ie) {
+				try {
+					Thread.sleep(500L * attempt);
+				} catch (InterruptedException ie) {
 					Thread.currentThread().interrupt();
-					throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(), "Retry interrupted", ie);
+					throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(), "Interrupted during retry", ie);
 				}
 			}
 		}
