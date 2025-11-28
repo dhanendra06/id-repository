@@ -34,7 +34,7 @@ public class CredentialStoreBeanConfig {
 
 	@Bean
 	public IdRepoSecurityManager securityManager() {
-		return new IdRepoSecurityManager();
+		return new IdRepoSecurityManager(restHelperWithAuth(webClient));
 	}
 
 	/**

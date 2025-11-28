@@ -7,6 +7,7 @@ import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.concurrent.Semaphore;
 
 import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +44,15 @@ public class ObjectStoreHelper {
 	@Value("${" + OBJECT_STORE_ADAPTER_NAME + "}")
 	private String objectStoreAdapterName;
 
+	/**
+	 * CONFIGURABLE crypto concurrency gate.
+	 * Default: 8 (good for 2-4 vCPU)
+	 */
+	@Value("${idrepo.crypto.max-concurrency:8}")
+	private int cryptoMaxConcurrency;
+
+	private Semaphore cryptoSemaphore;
+
 	private ObjectStoreAdapter objectStore;
 
 	private Logger mosipLogger = IdRepoLogger.getLogger(ObjectStoreHelper.class);
@@ -55,13 +65,22 @@ public class ObjectStoreHelper {
 	@Autowired
 	private IdRepoSecurityManager securityManager;
 
-	public boolean demographicObjectExists(String uinHash, String fileRefId)  {
+	@Autowired
+	public void initSemaphore() {
+		this.cryptoSemaphore = new Semaphore(cryptoMaxConcurrency);
+	}
+
+	/* ======================= EXISTS ======================= */
+
+	public boolean demographicObjectExists(String uinHash, String fileRefId) {
 		return exists(uinHash, false, fileRefId);
 	}
 
-	public boolean biometricObjectExists(String uinHash, String fileRefId)  {
+	public boolean biometricObjectExists(String uinHash, String fileRefId) {
 		return exists(uinHash, true, fileRefId);
 	}
+
+	/* ========================= PUT ======================== */
 
 	public void putDemographicObject(String uinHash, String fileRefId, byte[] data) throws IdRepoAppException {
 		putObject(uinHash, false, fileRefId, data, demoDataRefId);
@@ -71,63 +90,116 @@ public class ObjectStoreHelper {
 		putObject(uinHash, true, fileRefId, data, bioDataRefId);
 	}
 
-	public byte[] getDemographicObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		if (!this.demographicObjectExists(uinHash, fileRefId)) {
-			throw new IdRepoAppException(FILE_NOT_FOUND);
-		}
-		return getObject(uinHash, false, fileRefId, demoDataRefId);
-	}
-
-	public byte[] getBiometricObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		if (!this.biometricObjectExists(uinHash, fileRefId)) {
-			throw new IdRepoAppException(FILE_NOT_FOUND);
-		}
-		return getObject(uinHash, true, fileRefId, bioDataRefId);
-	}
-
-	public void deleteBiometricObject(String uinHash, String fileRefId)  {
-		if (this.biometricObjectExists(uinHash, fileRefId)) {
-			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
-			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
-		}
-	}
-
-	private boolean exists(String uinHash, boolean isBio, String fileRefId)  {
-		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-			return objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
-	}
-
 	private void putObject(String uinHash, boolean isBio, String fileRefId, byte[] data, String refId)
 			throws IdRepoAppException {
+
 		if (data == null || data.length == 0) {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
 					"Input data is null or empty");
 		}
 
-		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
+		String objectName = uinHash + SLASH +
+				(isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
 
-		try (InputStream encryptData = new ByteArrayInputStream(securityManager.encrypt(data, refId))) {
-			objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName, encryptData);
+		boolean acquired = false;
+
+		try {
+			cryptoSemaphore.acquire();
+			acquired = true;
+
+			byte[] encrypted = securityManager.encrypt(data, refId);
+
+			try (InputStream stream = new ByteArrayInputStream(encrypted)) {
+				objectStore.putObject(
+						objectStoreAccountName, objectStoreBucketName,
+						null, null, objectName,
+						stream
+				);
+			}
+
 			mosipLogger.debug("Uploaded object: {} ({} bytes)", objectName, data.length);
+
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Interrupted while encrypting", e);
+
 		} catch (IOException | ObjectStoreAdapterException e) {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
 					"Failed to store object: " + e.getMessage(), e);
+
+		} finally {
+			if (acquired) cryptoSemaphore.release();
 		}
 	}
 
+	/* ======================== GET ========================= */
+
+	public byte[] getDemographicObject(String uinHash, String fileRefId) throws IdRepoAppException {
+		if (!demographicObjectExists(uinHash, fileRefId))
+			throw new IdRepoAppException(FILE_NOT_FOUND);
+		return getObject(uinHash, false, fileRefId, demoDataRefId);
+	}
+
+	public byte[] getBiometricObject(String uinHash, String fileRefId) throws IdRepoAppException {
+		if (!biometricObjectExists(uinHash, fileRefId))
+			throw new IdRepoAppException(FILE_NOT_FOUND);
+		return getObject(uinHash, true, fileRefId, bioDataRefId);
+	}
 
 	private byte[] getObject(String uinHash, boolean isBio, String fileRefId, String refId)
 			throws IdRepoAppException {
-		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-		InputStream rawStream = objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
-		if (rawStream == null) {
+
+		String objectName = uinHash + SLASH +
+				(isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
+
+		InputStream rawStream =
+				objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+
+		if (rawStream == null)
 			throw new IdRepoAppException(FILE_NOT_FOUND);
-		}
+
+		boolean acquired = false;
+
 		try (InputStream s3Stream = new BufferedInputStream(rawStream)) {
-			return securityManager.decrypt(IOUtils.toByteArray(s3Stream), refId);
+
+			cryptoSemaphore.acquire();
+			acquired = true;
+
+			byte[] encryptedData = IOUtils.toByteArray(s3Stream);
+			return securityManager.decrypt(encryptedData, refId);
+
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Interrupted during decrypt", e);
+
 		} catch (IOException | ObjectStoreAdapterException e) {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
 					"Failed to retrieve object: " + e.getMessage(), e);
+
+		} finally {
+			if (acquired) cryptoSemaphore.release();
 		}
+	}
+
+	/* ======================== DELETE ======================= */
+
+	public void deleteBiometricObject(String uinHash, String fileRefId) {
+		if (biometricObjectExists(uinHash, fileRefId)) {
+			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
+			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		}
+	}
+
+	/* ======================== INTERNAL ======================= */
+
+	private boolean exists(String uinHash, boolean isBio, String fileRefId) {
+		String name = uinHash + SLASH +
+				(isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
+
+		return objectStore.exists(
+				objectStoreAccountName, objectStoreBucketName, null, null, name
+		);
 	}
 }

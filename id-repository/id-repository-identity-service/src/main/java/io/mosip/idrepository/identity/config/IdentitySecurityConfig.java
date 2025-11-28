@@ -19,11 +19,6 @@ public class IdentitySecurityConfig {
 	}
 	
 	@Bean
-	public IdRepoSecurityManager securityManagerWithAuth(@Qualifier("selfTokenWebClient") WebClient webClient) {
-		return new IdRepoSecurityManager(restHelperWithAuth(webClient));
-	}
-	
-	@Bean
 	public CredentialServiceManager credentialServiceManager(@Qualifier("selfTokenWebClient") WebClient webClient) {
 		return new CredentialServiceManager(restHelperWithAuth(webClient));
 	}

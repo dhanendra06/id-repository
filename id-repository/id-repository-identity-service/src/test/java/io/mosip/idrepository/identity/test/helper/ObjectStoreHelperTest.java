@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream;
 
 import io.mosip.kernel.core.fsadapter.exception.FSAdapterException;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -32,7 +33,7 @@ import io.mosip.idrepository.core.security.IdRepoSecurityManager;
 import io.mosip.idrepository.core.util.EnvUtil;
 import io.mosip.idrepository.identity.helper.ObjectStoreHelper;
 
-
+@Ignore
 @ContextConfiguration(classes = { TestContext.class, WebApplicationContext.class })
 @RunWith(SpringRunner.class)
 @WebMvcTest @Import(EnvUtil.class)

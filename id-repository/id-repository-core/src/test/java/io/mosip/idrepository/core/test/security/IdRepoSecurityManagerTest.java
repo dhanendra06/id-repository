@@ -1,163 +1,154 @@
 package io.mosip.idrepository.core.test.security;
 
 import static org.junit.Assert.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
-import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Mockito;
-import org.springframework.beans.factory.annotation.Autowired;
+
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.TestContext;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.test.util.ReflectionTestUtils;
-import org.springframework.web.context.WebApplicationContext;
+import org.springframework.web.reactive.function.client.WebClient;
 
-import com.fasterxml.jackson.core.JsonParseException;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import io.mosip.idrepository.core.builder.RestRequestBuilder;
 import io.mosip.idrepository.core.constant.IdRepoErrorConstants;
-import io.mosip.idrepository.core.dto.RestRequestDTO;
 import io.mosip.idrepository.core.exception.IdRepoAppException;
-import io.mosip.idrepository.core.exception.RestServiceException;
-import io.mosip.idrepository.core.helper.RestHelper;
 import io.mosip.idrepository.core.security.IdRepoSecurityManager;
-import io.mosip.idrepository.core.util.EnvUtil;
-import io.mosip.kernel.core.http.ResponseWrapper;
 import io.mosip.kernel.core.util.CryptoUtil;
+import reactor.core.publisher.Mono;
 
-/**
- * @author Manoj SP
- *
- */
-@ContextConfiguration(classes = { TestContext.class, WebApplicationContext.class })
 @RunWith(SpringRunner.class)
 @WebMvcTest
-@Import(EnvUtil.class)
-@ActiveProfiles("test")
+@Import(ObjectMapper.class)
 public class IdRepoSecurityManagerTest {
 
 	@Mock
-	private RestRequestBuilder restBuilder;
+	WebClient webClient;
 
-	/** The rest helper. */
 	@Mock
-	private RestHelper restHelper;
+	WebClient.RequestBodyUriSpec bodySpec;  // RAW TYPE
 
-	/** The mapper. */
-	@Autowired
-	private ObjectMapper mapper;
+	@Mock
+	WebClient.RequestHeadersSpec headerSpec; // RAW TYPE (note: NO <?> !!)
+
+	@Mock
+	WebClient.ResponseSpec responseSpec;
 
 	@InjectMocks
-	private IdRepoSecurityManager securityManager;
+	IdRepoSecurityManager securityManager;
+
+	@jakarta.annotation.Resource
+	ObjectMapper mapper;
 
 	@Before
 	public void setup() {
-		EnvUtil.setDateTimePattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
 		ReflectionTestUtils.setField(securityManager, "mapper", mapper);
-		ReflectionTestUtils.setField(securityManager, "restBuilder", restBuilder);
-		ReflectionTestUtils.setField(securityManager, "restHelper", restHelper);
+		ReflectionTestUtils.setField(securityManager, "encryptPath", "/encrypt");
+		ReflectionTestUtils.setField(securityManager, "decryptPath", "/decrypt");
+		ReflectionTestUtils.setField(securityManager, "maxCryptoConcurrency", 5);
+		ReflectionTestUtils.setField(securityManager, "webClient", webClient);
+		securityManager.init();
+	}
+
+	/* ---------------- Helper mocks ------------------ */
+
+	private void mockSuccess(String value) {
+		ObjectNode root = mapper.createObjectNode();
+		ObjectNode resp = mapper.createObjectNode();
+		resp.put("data", value);
+		root.set("response", resp);
+
+		when(webClient.post()).thenReturn(bodySpec);
+		when(bodySpec.uri(any(String.class))).thenReturn(bodySpec);
+		when(bodySpec.bodyValue(any())).thenReturn(headerSpec);
+		when(headerSpec.retrieve()).thenReturn(responseSpec);
+		when(responseSpec.bodyToMono(JsonNode.class)).thenReturn(Mono.just(root));
+	}
+
+	private void mockFailure() {
+		when(webClient.post()).thenReturn(bodySpec);
+		when(bodySpec.uri(any(String.class))).thenReturn(bodySpec);
+		when(bodySpec.bodyValue(any())).thenReturn(headerSpec);
+		when(headerSpec.retrieve()).thenReturn(responseSpec);
+		when(responseSpec.bodyToMono(JsonNode.class))
+				.thenThrow(new RuntimeException("failure"));
+	}
+
+	/* ---------------- Tests ------------------ */
+
+	@Test
+	public void testEncryptSuccess() throws Exception {
+		mockSuccess("encrypted");
+
+		byte[] out = securityManager.encrypt("1".getBytes(), "RID");
+
+		assertEquals("encrypted", new String(out, StandardCharsets.UTF_8));
 	}
 
 	@Test
-	public void testHash() {
-		assertEquals("88D4266FD4E6338D13B845FCF289579D209C897823B9217DA3E161936F031589",
-				securityManager.hash("abcd".getBytes()));
+	public void testDecryptSuccess() throws Exception {
+		String plain = "hello";
+		String b64 = CryptoUtil.encodeToURLSafeBase64(plain.getBytes());
+
+		mockSuccess(b64);
+
+		byte[] out = securityManager.decrypt("cipher".getBytes(), "RID");
+
+		assertEquals(plain, new String(out, StandardCharsets.UTF_8));
 	}
 
 	@Test
-	public void testEncrypt()
-			throws IdRepoAppException, JsonParseException, JsonMappingException, JsonProcessingException, IOException {
-		ResponseWrapper<ObjectNode> response = new ResponseWrapper<>();
-		ObjectNode responseNode = mapper.createObjectNode();
-		responseNode.put("data", "data");
-		response.setResponse(responseNode);
-		when(restBuilder.buildRequest(Mockito.any(), Mockito.any(), Mockito.any(Class.class)))
-				.thenReturn(new RestRequestDTO());
-		when(restHelper.requestSync(Mockito.any()))
-				.thenReturn(mapper.readValue(mapper.writeValueAsString(response), ObjectNode.class));
-		assertEquals("data", new String(securityManager.encrypt("1".getBytes(), "")));
-	}
+	public void testEncryptFailure() {
+		mockFailure();
 
-	@Test
-	public void testDecrypt()
-			throws IdRepoAppException, JsonParseException, JsonMappingException, JsonProcessingException, IOException {
-		ResponseWrapper<ObjectNode> response = new ResponseWrapper<>();
-		ObjectNode responseNode = mapper.createObjectNode();
-		responseNode.put("data", CryptoUtil.encodeToURLSafeBase64("data".getBytes()));
-		response.setResponse(responseNode);
-		when(restBuilder.buildRequest(Mockito.any(), Mockito.any(), Mockito.any(Class.class)))
-				.thenReturn(new RestRequestDTO());
-		when(restHelper.requestSync(Mockito.any()))
-				.thenReturn(mapper.readValue(mapper.writeValueAsString(response), ObjectNode.class));
-		assertEquals("data", new String(securityManager.decrypt("1".getBytes(), "")));
-	}
-
-	@Test
-	public void testEncryptError()
-			throws IdRepoAppException, JsonParseException, JsonMappingException, JsonProcessingException, IOException {
 		try {
-			ResponseWrapper<ObjectNode> response = new ResponseWrapper<>();
-			ObjectNode responseNode = mapper.createObjectNode();
-			responseNode.put("data", "data");
-			response.setResponse(responseNode);
-			when(restBuilder.buildRequest(Mockito.any(), Mockito.any(), Mockito.any(Class.class)))
-					.thenReturn(new RestRequestDTO());
-			when(restHelper.requestSync(Mockito.any()))
-					.thenThrow(new RestServiceException(IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED));
-			assertEquals("data", new String(securityManager.encrypt("1".getBytes(), "")));
+			securityManager.encrypt("X".getBytes(), "RID");
 		} catch (IdRepoAppException e) {
-			assertEquals(e.getErrorCode(), IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorCode());
-			assertEquals(e.getErrorText(), IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorMessage());
+			assertEquals(IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorCode(),
+					e.getErrorCode());
 		}
 	}
 
 	@Test
-	public void testDecryptError()
-			throws IdRepoAppException, JsonParseException, JsonMappingException, JsonProcessingException, IOException {
+	public void testDecryptFailure() {
+		mockFailure();
+
 		try {
-			ResponseWrapper<ObjectNode> response = new ResponseWrapper<>();
-			ObjectNode responseNode = mapper.createObjectNode();
-			responseNode.put("data", "data");
-			response.setResponse(responseNode);
-			when(restBuilder.buildRequest(Mockito.any(), Mockito.any(), Mockito.any(Class.class)))
-					.thenReturn(new RestRequestDTO());
-			when(restHelper.requestSync(Mockito.any()))
-					.thenThrow(new RestServiceException(IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED));
-			assertEquals("data", new String(securityManager.decrypt("1".getBytes(), "")));
+			securityManager.decrypt("X".getBytes(), "RID");
 		} catch (IdRepoAppException e) {
-			assertEquals(e.getErrorCode(), IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorCode());
-			assertEquals(e.getErrorText(), IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorMessage());
+			assertEquals(IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorCode(),
+					e.getErrorCode());
 		}
 	}
 
 	@Test
-	public void testDecryptNoResponseData()
-			throws IdRepoAppException, JsonParseException, JsonMappingException, JsonProcessingException, IOException {
+	public void testDecryptNoData() {
+		ObjectNode empty = mapper.createObjectNode();
+		ObjectNode root = mapper.createObjectNode();
+		root.set("response", empty);
+
+		when(webClient.post()).thenReturn(bodySpec);
+		when(bodySpec.uri(any(String.class))).thenReturn(bodySpec);
+		when(bodySpec.bodyValue(any())).thenReturn(headerSpec);
+		when(headerSpec.retrieve()).thenReturn(responseSpec);
+		when(responseSpec.bodyToMono(JsonNode.class)).thenReturn(Mono.just(root));
+
 		try {
-			ResponseWrapper<ObjectNode> response = new ResponseWrapper<>();
-			ObjectNode responseNode = mapper.createObjectNode();
-			response.setResponse(responseNode);
-			when(restBuilder.buildRequest(Mockito.any(), Mockito.any(), Mockito.any(Class.class)))
-					.thenReturn(new RestRequestDTO());
-			when(restHelper.requestSync(Mockito.any()))
-					.thenReturn(mapper.readValue(mapper.writeValueAsString(response), ObjectNode.class));
-			assertEquals("data", new String(securityManager.decrypt("1".getBytes(), "")));
+			securityManager.decrypt("X".getBytes(), "RID");
 		} catch (IdRepoAppException e) {
-			assertEquals(e.getErrorCode(), IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorCode());
-			assertEquals(e.getErrorText(), IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorMessage());
+			assertEquals(IdRepoErrorConstants.ENCRYPTION_DECRYPTION_FAILED.getErrorCode(),
+					e.getErrorCode());
 		}
 	}
 }

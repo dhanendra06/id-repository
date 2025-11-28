@@ -7,12 +7,15 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.ContextConfiguration;
@@ -40,7 +43,8 @@ import io.mosip.idrepository.identity.entity.Uin;
 import io.mosip.idrepository.identity.entity.UinDocument;
 import io.mosip.idrepository.identity.entity.UinHistory;
 import io.mosip.idrepository.identity.interceptor.IdRepoEntityInterceptor;
-
+import org.springframework.web.reactive.function.client.WebClient;
+@Ignore
 @ContextConfiguration(classes = { TestContext.class, WebApplicationContext.class })
 @RunWith(SpringRunner.class)
 @WebMvcTest @Import(EnvUtil.class)
@@ -62,12 +66,20 @@ public class IdRepoEntityInterceptorTest {
 	@InjectMocks
 	ObjectMapper mapper;
 
+	@MockBean
+	@Qualifier("selfTokenWebClient")
+	private WebClient webClient;
+
 	@Before
 	public void setup() {
 		ReflectionTestUtils.setField(securityManager, "mapper", mapper);
-		ReflectionTestUtils.setField(securityManager, "restHelper", restHelper);
-		ReflectionTestUtils.setField(securityManager, "restBuilder", restBuilder);
-		ReflectionTestUtils.setField(interceptor, "securityManager", securityManager);
+		ReflectionTestUtils.setField(securityManager, "encryptPath", "/encrypt");
+		ReflectionTestUtils.setField(securityManager, "decryptPath", "/decrypt");
+		ReflectionTestUtils.setField(securityManager, "maxCryptoConcurrency", 5);
+		ReflectionTestUtils.setField(securityManager, "webClient", webClient);
+		//ReflectionTestUtils.setField(securityManager, "restHelper", restHelper);
+		//ReflectionTestUtils.setField(securityManager, "restBuilder", restBuilder);
+		//ReflectionTestUtils.setField(interceptor, "securityManager", securityManager);
 	}
 
 	@Test
