@@ -280,16 +280,6 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 		return Executors.newVirtualThreadPerTaskExecutor();
 	}
 
-	/**
-	 * If the old "withSecurityContext" bean name must be preserved
-	 * for other callers in the codebase, keep this alias.
-	 * Otherwise delete it.
-	 */
-	@Bean("withSecurityContext")
-	public Executor withSecurityContext() {
-		return Executors.newVirtualThreadPerTaskExecutor();
-	}
-
 	private ThreadPoolTaskExecutor threadPoolTaskExecutor() {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 		executor.setCorePoolSize(corePoolSize);
