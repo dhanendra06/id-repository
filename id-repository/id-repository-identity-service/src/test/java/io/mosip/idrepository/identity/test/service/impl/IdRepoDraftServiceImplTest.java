@@ -468,14 +468,16 @@ public class IdRepoDraftServiceImplTest {
 		biometric.setBiometricFileHash("A2C07E94066BE52308E96ABAD995035E62985A1B0D8837E9ACAB47F8F8A52014");
 		biometric.setBioFileId("1234");
 		biometric.setBiometricFileName("name");
-		draft.setBiometrics(Collections.singletonList(biometric));
+		//draft.setBiometrics(Collections.singletonList(biometric));
 		UinDocumentDraft document = new UinDocumentDraft();
 		document.setDoccatCode("ProofOfIdentity");
 		document.setDocHash("3A6EB0790F39AC87C94F3856B2DD2C5D110E6811602261A9A923D3BB23ADC8B7");
 		document.setDocId("1234");
 		document.setDocName("name");
 		ReflectionTestUtils.setField(idRepoServiceImpl, "mapper", mapper);
-		draft.setDocuments(Collections.singletonList(document));
+		draft.setBiometrics(new ArrayList<>(Collections.singletonList(biometric)));
+		draft.setDocuments(new ArrayList<>(Collections.singletonList(document)));
+		//draft.setDocuments(Collections.singletonList(document));
 		draft.setUinDataHash(DatatypeConverter
 				.printHexBinary(MessageDigest.getInstance("SHA-256").digest("2419762130".getBytes())).toUpperCase());
 		ReflectionTestUtils.setField(idRepoServiceImpl, "cbeffUtil", cbeffUtil);
