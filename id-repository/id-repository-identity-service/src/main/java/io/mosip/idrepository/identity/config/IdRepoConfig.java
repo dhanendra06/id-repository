@@ -4,6 +4,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -264,14 +266,28 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 					threadPoolTaskExecutor.getThreadPoolExecutor().getTaskCount(), threadPoolQueueSize);
 	}
 
-	/*
-	 * This bean is returned because for async task the security context needs to be
-	 * passed.
+
+	/**
+	 * Virtual-thread executor for biometric extraction.
+	 * Used by BiometricExtractionServiceImpl via @Qualifier("bioExtractionExecutor").
 	 *
+	 * Replaces the old "withSecurityContext" ThreadPoolTaskExecutor.
+	 * If your existing bean is named "withSecurityContext", rename this bean
+	 * to match and remove @Qualifier from the injection site.
+	 */
+	@Bean("bioExtractionExecutor")
+	public Executor bioExtractionExecutor() {
+		return Executors.newVirtualThreadPerTaskExecutor();
+	}
+
+	/**
+	 * If the old "withSecurityContext" bean name must be preserved
+	 * for other callers in the codebase, keep this alias.
+	 * Otherwise delete it.
 	 */
 	@Bean("withSecurityContext")
-	public DelegatingSecurityContextAsyncTaskExecutor taskExecutor() {
-		return new DelegatingSecurityContextAsyncTaskExecutor(threadPoolTaskExecutor());
+	public Executor withSecurityContext() {
+		return Executors.newVirtualThreadPerTaskExecutor();
 	}
 
 	private ThreadPoolTaskExecutor threadPoolTaskExecutor() {
