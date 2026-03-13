@@ -56,7 +56,6 @@ import org.skyscreamer.jsonassert.JSONCompareMode;
 import org.skyscreamer.jsonassert.JSONCompareResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.env.Environment;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
@@ -699,7 +698,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	 * - Proper charset handling
 	 */
 	@Override
-	@Cacheable(value = "draftUinCache", key = "#uin", unless = "#result.drafts == null || #result.drafts.isEmpty()")
+	//@Cacheable(value = "draftUinCache", key = "#uin", unless = "#result.drafts == null || #result.drafts.isEmpty()")
 	public DraftResponseDto getDraftUin(String uin) throws IdRepoAppException {
 		String uinHash = super.getUinHash(uin);
 		DraftResponseDto draftResponseDto = new DraftResponseDto();
