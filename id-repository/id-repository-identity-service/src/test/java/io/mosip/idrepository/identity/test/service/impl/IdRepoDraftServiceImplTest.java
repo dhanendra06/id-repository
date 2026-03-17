@@ -694,15 +694,14 @@ public class IdRepoDraftServiceImplTest {
 		uin.setUinDataHash(DatatypeConverter
 				.printHexBinary(MessageDigest.getInstance("SHA-256").digest("2419762130".getBytes())).toUpperCase());
 		Optional<UinDraft> uinOpt = Optional.of(uin);
-		when(uinDraftRepo.findByRegId(Mockito.any())).thenReturn(uinOpt);
+		when(uinDraftRepo.existsByRegId(Mockito.any())).thenReturn(true);
 		IdResponseDTO response = idRepoServiceImpl.discardDraft("1234567890");
 		assertNotNull(response);
 	}
 
 	@Test(expected = IdRepoAppException.class)
 	public void testDiscardDraftwithEmptyUin() throws IdRepoAppException {
-		Optional<UinDraft> uinOpt = Optional.empty();
-		when(uinDraftRepo.findByRegId(Mockito.any())).thenReturn(uinOpt);
+		when(uinDraftRepo.existsByRegId(Mockito.any())).thenReturn(false);
 		IdResponseDTO response = idRepoServiceImpl.discardDraft("1234567890");
 		assertNotNull(response);
 	}
@@ -825,7 +824,7 @@ public class IdRepoDraftServiceImplTest {
 	@Test
 	public void testDiscardDraftJDBCConnectionException() throws IdRepoAppException {
 		try {
-			when(uinDraftRepo.findByRegId(Mockito.any())).thenThrow(JDBCConnectionException.class);
+			when(uinDraftRepo.existsByRegId(Mockito.any())).thenThrow(JDBCConnectionException.class);
 			IdResponseDTO response = idRepoServiceImpl.discardDraft("123567890");
 			assertNotNull(response);
 		} catch (IdRepoAppException e) {

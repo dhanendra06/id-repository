@@ -12,6 +12,9 @@ import java.io.IOException;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 import jakarta.annotation.Resource;
@@ -29,6 +32,7 @@ import io.mosip.kernel.core.websub.spi.PublisherClient;
 import org.apache.commons.lang3.StringUtils;
 import org.hibernate.exception.JDBCConnectionException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.dao.DataAccessException;
@@ -126,6 +130,10 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 
 	@Autowired
 	private BiometricExtractionService biometricExtractionService;
+
+	@Autowired(required = false)
+	@Qualifier("bioExtractionExecutor")
+	private Executor bioExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
 	@Autowired
 	private PublisherClient<String, EventModel, HttpHeaders> pb;
@@ -347,9 +355,9 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 	 * @return the demographic files
 	 */
 	private void getDemographicFiles(Uin uinObject, List<DocumentsDTO> documents) {
+		String uinHash = uinObject.getUinHash().split("_")[1];
 		uinObject.getDocuments().stream().forEach(demo -> {
 			try {
-				String uinHash = uinObject.getUinHash().split("_")[1];
 				byte[] data = objectStoreHelper.getDemographicObject(uinHash, demo.getDocId());
 				if (demo.getDocHash().equals(securityManager.hash(data))) {
 					documents.add(new DocumentsDTO(demo.getDoccatCode(), CryptoUtil.encodeToURLSafeBase64(data)));
@@ -375,38 +383,50 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 	 * @return the biometric files
 	 */
 	private void getBiometricFiles(Uin uinObject, List<DocumentsDTO> documents, Map<String, String> extractionFormats) {
-		uinObject.getBiometrics().stream().forEach(bio -> {
-			if (allowedBioAttributes.contains(bio.getBiometricFileType())) {
-				try {
-					String uinHash = uinObject.getUinHash().split("_")[1];
-					byte[] data = objectStoreHelper.getBiometricObject(uinHash, bio.getBioFileId());
-					if (Objects.nonNull(data)) {
+		String uinHash = uinObject.getUinHash().split("_")[1];
+		List<CompletableFuture<Optional<DocumentsDTO>>> futures = uinObject.getBiometrics().stream()
+				.filter(bio -> allowedBioAttributes.contains(bio.getBiometricFileType()))
+				.map(bio -> CompletableFuture.supplyAsync(() -> {
+					try {
+						byte[] data = objectStoreHelper.getBiometricObject(uinHash, bio.getBioFileId());
+						if (data == null) return Optional.<DocumentsDTO>empty();
 						if (Objects.nonNull(extractionFormats) && !extractionFormats.isEmpty()) {
 							byte[] extractedData = getBiometricsForRequestedFormats(uinHash, bio.getBioFileId(),
 									extractionFormats, data);
 							if (Objects.nonNull(extractedData)) {
-								documents.add(new DocumentsDTO(bio.getBiometricFileType(),
+								return Optional.of(new DocumentsDTO(bio.getBiometricFileType(),
 										CryptoUtil.encodeToURLSafeBase64(extractedData)));
 							}
-
 						} else {
 							if (StringUtils.equals(bio.getBiometricFileHash(), securityManager.hash(data))) {
-								documents.add(
-										new DocumentsDTO(bio.getBiometricFileType(),
-												CryptoUtil.encodeToURLSafeBase64(data)));
+								return Optional.of(new DocumentsDTO(bio.getBiometricFileType(),
+										CryptoUtil.encodeToURLSafeBase64(data)));
 							} else {
 								mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, GET_FILES,
 										DOCUMENT_HASH_MISMATCH.getErrorMessage());
-								throw new IdRepoAppException(DOCUMENT_HASH_MISMATCH);
+								throw new IdRepoAppUncheckedException(DOCUMENT_HASH_MISMATCH.getErrorCode(),
+										DOCUMENT_HASH_MISMATCH.getErrorMessage());
 							}
 						}
+						return Optional.<DocumentsDTO>empty();
+					} catch (IdRepoAppException e) {
+						mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, GET_FILES, e.getMessage());
+						throw new IdRepoAppUncheckedException(e.getErrorCode(), e.getErrorText(), e);
 					}
-				} catch (IdRepoAppException e) {
-					mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, GET_FILES, e.getMessage());
-					throw new IdRepoAppUncheckedException(e.getErrorCode(), e.getErrorText(), e);
-				}
-			}
-		});
+				}, bioExecutor))
+				.collect(Collectors.toList());
+		try {
+			CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+		} catch (CompletionException e) {
+			Throwable cause = e.getCause();
+			if (cause instanceof IdRepoAppUncheckedException) throw (IdRepoAppUncheckedException) cause;
+			throw e;
+		}
+		futures.stream()
+				.map(CompletableFuture::join)
+				.filter(Optional::isPresent)
+				.map(Optional::get)
+				.forEach(documents::add);
 	}
 
 	protected byte[] getBiometricsForRequestedFormats(String uinHash, String fileName,

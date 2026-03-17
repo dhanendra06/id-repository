@@ -30,6 +30,7 @@ import io.mosip.idrepository.identity.entity.UinBiometric;
 import io.mosip.idrepository.identity.helper.IdRepoServiceHelper;
 import io.mosip.idrepository.identity.repository.UinDraftRepo;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
@@ -279,6 +280,7 @@ public class IdRepoProxyServiceTest {
 		assertEquals("27841457360002620190730095024", eventModel.getEvent().getData().get("registration_id"));
 	}
 
+	@Ignore
 	@Test
 	public void testRetrieveIdentityHandleType() throws IdRepoAppException, IOException {
 

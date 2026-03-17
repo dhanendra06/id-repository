@@ -83,17 +83,12 @@ public class ObjectStoreHelper {
 	}
 
 	public byte[] getBiometricObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		if (!this.biometricObjectExists(uinHash, fileRefId)) {
-			throw new IdRepoAppException(FILE_NOT_FOUND);
-		}
 		return getObject(uinHash, true, fileRefId, bioDataRefId);
 	}
 
 	public void deleteBiometricObject(String uinHash, String fileRefId)  {
-		if (this.biometricObjectExists(uinHash, fileRefId)) {
-			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
-			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
-		}
+		String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
+		objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
 	}
 
 	private boolean exists(String uinHash, boolean isBio, String fileRefId)  {

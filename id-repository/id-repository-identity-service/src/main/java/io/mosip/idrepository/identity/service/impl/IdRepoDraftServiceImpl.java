@@ -38,12 +38,16 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jayway.jsonpath.spi.json.JacksonJsonProvider;
 import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
 import io.mosip.idrepository.core.dto.DraftResponseDto;
@@ -55,8 +59,8 @@ import org.skyscreamer.jsonassert.JSONCompare;
 import org.skyscreamer.jsonassert.JSONCompareMode;
 import org.skyscreamer.jsonassert.JSONCompareResult;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.env.Environment;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.TransactionException;
@@ -140,6 +144,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	@Value("${" + UIN_REFID + "}")
 	private String uinRefId;
 
+	@Value("${" + EXCLUDED_ATTRIBUTE_LIST + ":" + DEFAULT_ATTRIBUTE_LIST + "}")
+	private String excludedAttributeList = DEFAULT_ATTRIBUTE_LIST;
+
 	@Autowired
 	private UinDraftRepo uinDraftRepo;
 
@@ -164,8 +171,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	@Autowired
 	private VidDraftHelper vidDraftHelper;
 
-	@Autowired
-	private Environment environment;
+	@Autowired(required = false)
+	@Qualifier("bioExtractionExecutor")
+	private Executor bioExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
 	@Value("${mosip.idrepo.create-identity.enable-force-merge:false}")
 	private boolean isForceMergeEnabled;
@@ -325,7 +333,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 				}
 			}
 
-			draftToUpdate.setUinData(convertToBytes(convertToObject(dbData.jsonString().getBytes(StandardCharsets.UTF_8), Map.class)));
+			draftToUpdate.setUinData(convertToBytes(dbData.json()));
 			draftToUpdate.setUinDataHash(securityManager.hash(draftToUpdate.getUinData()));
 			draftToUpdate.setUpdatedBy(IdRepoSecurityManager.getUser());
 			draftToUpdate.setUpdatedDateTime(DateUtils2.getUTCCurrentDateTime());
@@ -447,7 +455,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 				}
 				anonymousProfileHelper.buildAndsaveProfile(true);
 				publishDocuments(draft, uinObject);
-				this.discardDraft(regId);
+				uinDraftRepo.deleteByRegId(regId);
 				return constructIdResponse(null, uinObject.getStatusCode(), null, draftVid);
 			}
 		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
@@ -538,8 +546,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	@Override
 	public IdResponseDTO discardDraft(String regId) throws IdRepoAppException {
 		try {
-			Optional<UinDraft> draftOptional = uinDraftRepo.findByRegId(regId);
-			if (draftOptional.isPresent()) {
+			if (uinDraftRepo.existsByRegId(regId)) {
 				uinDraftRepo.deleteByRegId(regId);
 				return constructIdResponse(null, "DISCARDED", null, null);
 			} else {
@@ -640,9 +647,36 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		try {
 			String uinHash = draft.getUinHash().split("_")[1];
 			for (UinBiometricDraft bioDraft : draft.getBiometrics()) {
-				deleteExistingExtractedBioData(extractionFormats, uinHash, bioDraft);
-				extractAndGetCombinedCbeff(uinHash, bioDraft.getBioFileId(), extractionFormats);
+				String bioFileId = bioDraft.getBioFileId();
+
+				// Deletes (N formats) and source-bio load are independent — run them in parallel.
+				// Deletes must finish before extraction starts (otherwise tryLoadFromObjectStore
+				// would find the stale cached extraction and return it instead of re-extracting).
+				// Source load can overlap with deletes — it reads the original bio file, not
+				// any extracted file, so there is no ordering dependency.
+				CompletableFuture<Void> deleteFuture = CompletableFuture.runAsync(
+						() -> deleteExistingExtractedBioData(extractionFormats, uinHash, bioDraft),
+						bioExecutor);
+
+				CompletableFuture<byte[]> sourceFuture = CompletableFuture.supplyAsync(
+						() -> {
+							try {
+								return super.objectStoreHelper.getBiometricObject(uinHash, bioFileId);
+							} catch (IdRepoAppException e) {
+								throw new CompletionException(e);
+							}
+						}, bioExecutor);
+
+				// Wait for deletes first, then use the already-loaded source bytes
+				deleteFuture.join();
+				proxyService.getBiometricsForRequestedFormats(uinHash, bioFileId, extractionFormats, sourceFuture.join());
 			}
+		} catch (CompletionException e) {
+			Throwable cause = e.getCause();
+			String msg = cause != null ? cause.getMessage() : e.getMessage();
+			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, GET_DRAFT, msg);
+			if (cause instanceof IdRepoAppException) throw (IdRepoAppException) cause;
+			throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
 		} catch (Exception e) {
 			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, GET_DRAFT, e.getMessage());
 			throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
@@ -650,11 +684,14 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	}
 
 	private void deleteExistingExtractedBioData(Map<String, String> extractionFormats, String uinHash, UinBiometricDraft bioDraft) {
-		extractionFormats.entrySet()
-				.forEach(extractionFormat -> {
-					super.objectStoreHelper.deleteBiometricObject(uinHash,
-							buildExtractionFileName(extractionFormat, bioDraft.getBioFileId()));
-				});
+		// Each format's extracted file is independent — delete all in parallel
+		List<CompletableFuture<Void>> deleteFutures = extractionFormats.entrySet().stream()
+				.map(ef -> CompletableFuture.runAsync(
+						() -> super.objectStoreHelper.deleteBiometricObject(
+								uinHash, buildExtractionFileName(ef, bioDraft.getBioFileId())),
+						bioExecutor))
+				.collect(Collectors.toList());
+		CompletableFuture.allOf(deleteFutures.toArray(new CompletableFuture[0])).join();
 	}
 
 	private byte[] extractAndGetCombinedCbeff(String uinHash, String bioFileId, Map<String, String> extractionFormats)
@@ -711,7 +748,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 				draftUinResponseDto.setAttributes(getAttributeListFromUinData(uinDraft.getUinData()));
 				draftResponseDto.setDrafts(List.of(draftUinResponseDto));
 			}
-		} catch (DataAccessException | TransactionException | JDBCConnectionException | JsonProcessingException e) {
+		} catch (DataAccessException | TransactionException | JDBCConnectionException | IOException e) {
 			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, GET_DRAFT, e.getMessage());
 			throw new IdRepoAppException(DATABASE_ACCESS_ERROR, e);
 		}
@@ -724,21 +761,24 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	 * - Pre-allocated list
 	 * - Proper charset handling
 	 */
-	private List<String> getAttributeListFromUinData(byte[] uinData) throws JsonProcessingException {
+	private List<String> getAttributeListFromUinData(byte[] uinData) throws JsonProcessingException, IOException {
+		Set<String> excludedSet = getExcludedAttributeSet();
+		JsonNode jsonNode = mapper.readTree(uinData);
 		List<String> attributeList = new ArrayList<>();
-		String resultString = new String(uinData, StandardCharsets.UTF_8);
-		String excludedAttributeListProperty = environment.getProperty(EXCLUDED_ATTRIBUTE_LIST, DEFAULT_ATTRIBUTE_LIST);
-		List<String> excludedListPropertyList = List.of(excludedAttributeListProperty.split(COMMA));
-
-		ObjectMapper objectMapper = new ObjectMapper();
-		JsonNode jsonNode = objectMapper.readTree(resultString);
-
 		jsonNode.fieldNames().forEachRemaining(key -> {
-			if (!excludedListPropertyList.contains(key)) {
+			if (!excludedSet.contains(key)) {
 				attributeList.add(key);
 			}
 		});
-
 		return attributeList;
+	}
+
+	private volatile Set<String> cachedExcludedAttributeSet;
+
+	private Set<String> getExcludedAttributeSet() {
+		if (cachedExcludedAttributeSet == null) {
+			cachedExcludedAttributeSet = Set.of(excludedAttributeList.split(COMMA));
+		}
+		return cachedExcludedAttributeSet;
 	}
 }

@@ -135,8 +135,8 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 					() -> doExtract(uinHash, fileName, extractionType, extractionFormat, birsForModality),
 					executor);
 
-			// Always clean up from map, whether completed successfully or exceptionally
-			future.whenComplete((result, ex) -> inflightExtractions.remove(k));
+			// Two-arg remove: only evicts this exact future, never a newer one for the same key
+			future.whenComplete((result, ex) -> inflightExtractions.remove(k, future));
 			return future;
 		});
 	}
@@ -211,11 +211,8 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 	 */
 	private List<BIR> tryLoadFromObjectStore(String uinHash, String extractionFileName) {
 		try {
-			if (!objectStoreHelper.biometricObjectExists(uinHash, extractionFileName)) {
-				return null;
-			}
-			// Scope xmlBytes tightly — released as soon as getBIRDataFromXML returns
 			byte[] xmlBytes = objectStoreHelper.getBiometricObject(uinHash, extractionFileName);
+			if (xmlBytes == null) return null;
 			return cbeffUtil.getBIRDataFromXML(xmlBytes);
 
 		} catch (ObjectStoreAdapterException|IdRepoAppException e) {

@@ -80,13 +80,12 @@ public class BiometricExtractionServiceImplTest {
 	// ── Tests ─────────────────────────────────────────────────────────────────
 
 	/**
-	 * Cache hit path: biometricObjectExists=true → load from store → return cached BIRs.
+	 * Cache hit path: getBiometricObject returns bytes → load from store → return cached BIRs.
 	 * bioExtractionHelper must NOT be called.
 	 */
 	@Test
 	public void testExtractTemplateExtractionExists() throws Exception {
 		List<BIR> birs = loadTestBirs();
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(true);
 		when(objectStoreHelper.getBiometricObject(any(), any())).thenReturn(loadTestCbeffBytes());
 		when(cbeffUtil.getBIRDataFromXML(any())).thenReturn(birs);
 
@@ -99,12 +98,13 @@ public class BiometricExtractionServiceImplTest {
 	}
 
 	/**
-	 * Cache miss path: biometricObjectExists=false → extract → store → return extracted BIRs.
+	 * Cache miss path: getBiometricObject throws FILE_NOT_FOUND → extract → store → return extracted BIRs.
 	 */
 	@Test
 	public void testExtractTemplateExtractionNotExists() throws Exception {
 		List<BIR> birs = loadTestBirs();
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(false);
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_NOT_FOUND));
 		when(bioExtractionHelper.extractTemplates(any(), any())).thenReturn(birs);
 		when(cbeffUtil.createXML(any())).thenReturn(loadTestCbeffBytes());
 
@@ -122,7 +122,8 @@ public class BiometricExtractionServiceImplTest {
 	@Test
 	public void testExtractTemplateExtractedBioIsEmpty() throws Exception {
 		List<BIR> birs = loadTestBirs();
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(false);
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_NOT_FOUND));
 		when(bioExtractionHelper.extractTemplates(any(), any())).thenReturn(List.of());
 
 		CompletableFuture<List<BIR>> future =
@@ -139,8 +140,7 @@ public class BiometricExtractionServiceImplTest {
 	@Test
 	public void testExtractTemplateObjectStoreFailure() throws Exception {
 		List<BIR> birs = loadTestBirs();
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(true);
-		// Store exists but read fails — should fall through to extraction
+		// Store read fails — should fall through to extraction
 		when(objectStoreHelper.getBiometricObject(any(), any()))
 				.thenThrow(new ObjectStoreAdapterException("", ""));
 		when(bioExtractionHelper.extractTemplates(any(), any())).thenReturn(birs);
@@ -164,7 +164,8 @@ public class BiometricExtractionServiceImplTest {
 	@Test
 	public void testExtractTemplateBioExtractionFailure() throws Exception {
 		List<BIR> birs = loadTestBirs();
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(false);
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_NOT_FOUND));
 		when(bioExtractionHelper.extractTemplates(any(), any()))
 				.thenThrow(new BiometricExtractionException(IdRepoErrorConstants.UNKNOWN_ERROR));
 
@@ -192,7 +193,8 @@ public class BiometricExtractionServiceImplTest {
 	@Test
 	public void testExtractTemplateUnknownError() throws Exception {
 		List<BIR> birs = loadTestBirs();
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(false);
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_NOT_FOUND));
 		when(bioExtractionHelper.extractTemplates(any(), any()))
 				.thenThrow(new NullPointerException());
 

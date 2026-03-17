@@ -190,8 +190,9 @@ public class ObjectStoreHelperTest {
 
 	@Test
 	public void testDeleteBiometricObjectNotExists() throws IdRepoAppException {
-		when(adapter.exists(any(), any(), any(), any(), any())).thenReturn(Boolean.FALSE);
+		when(adapter.deleteObject(any(), any(), any(), any(), any())).thenReturn(Boolean.TRUE);
 		helper.deleteBiometricObject("hash", "refId");
+		verify(adapter).deleteObject(any(), any(), any(), any(), any());
 	}
 
 }
