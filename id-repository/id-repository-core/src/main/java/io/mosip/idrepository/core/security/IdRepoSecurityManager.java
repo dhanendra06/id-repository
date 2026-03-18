@@ -113,10 +113,8 @@ public class IdRepoSecurityManager {
 	private static final String ENCRYPT_DECRYPT_DATA     = "encryptDecryptData";
 	private static final String ID_REPO_SECURITY_MANAGER = "IdRepoSecurityManager";
 
-	/**
-	 * FIX-6: Read once at class load — was called on every encrypt/decrypt.
-	 */
-	private static final String DATE_TIME_PATTERN = EnvUtil.getDateTimePattern();
+	// DATE_TIME_PATTERN intentionally not cached as static final —
+	// EnvUtil.getDateTimePattern() may be set after class load (e.g. in tests).
 
 	// ── Logger ────────────────────────────────────────────────────────────────
 
@@ -328,7 +326,7 @@ public class IdRepoSecurityManager {
 	private ObjectNode buildBaseRequest() {
 		ObjectNode request = new ObjectNode(mapper.getNodeFactory());
 		request.put(APPLICATIONID, EnvUtil.getAppId());
-		request.put(TIME_STAMP, DateUtils2.formatDate(new Date(), DATE_TIME_PATTERN)); // FIX-6
+		request.put(TIME_STAMP, DateUtils2.formatDate(new Date(), EnvUtil.getDateTimePattern()));
 		return request;
 	}
 
