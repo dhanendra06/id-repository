@@ -698,14 +698,13 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	}
 
 	private void deleteExistingExtractedBioData(Map<String, String> extractionFormats, String uinHash, UinBiometricDraft bioDraft) {
-		// Each format's extracted file is independent — delete all in parallel
-		List<CompletableFuture<Void>> deleteFutures = extractionFormats.entrySet().stream()
-				.map(ef -> CompletableFuture.runAsync(
-						() -> super.objectStoreHelper.deleteBiometricObject(
-								uinHash, buildExtractionFileName(ef, bioDraft.getBioFileId())),
-						bioExecutor))
-				.collect(Collectors.toList());
-		CompletableFuture.allOf(deleteFutures.toArray(new CompletableFuture[0])).join();
+		// Run format deletes sequentially within this bio — bios are already parallelised
+		// at the caller level. Running deletes in parallel per bio multiplies concurrent
+		// S3 connections (N_bios × N_formats) causing S3Adapter.getConnection() timeouts.
+		for (Map.Entry<String, String> ef : extractionFormats.entrySet()) {
+			super.objectStoreHelper.deleteBiometricObject(
+					uinHash, buildExtractionFileName(ef, bioDraft.getBioFileId()));
+		}
 	}
 
 	private byte[] extractAndGetCombinedCbeff(String uinHash, String bioFileId, Map<String, String> extractionFormats)
