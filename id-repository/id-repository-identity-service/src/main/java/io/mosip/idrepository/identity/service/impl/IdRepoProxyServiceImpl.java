@@ -429,101 +429,48 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 				.forEach(documents::add);
 	}
 
-	protected byte[] getBiometricsForRequestedFormats(
-			String uinHash,
-			String fileName,
-			Map<String, String> extractionFormats,
-			byte[] originalData) throws IdRepoAppException {
-		long overallStartNs = System.nanoTime();
-		String logPrefix = "BIO-EXTRACT [" + fileName + "] ";
-		mosipLogger.info("{} START - formats: {}, input size: {} bytes",
-				logPrefix, extractionFormats, originalData.length);
+	protected byte[] getBiometricsForRequestedFormats(String uinHash, String fileName,
+													  Map<String, String> extractionFormats, byte[] originalData) throws IdRepoAppException {
 		try {
-			// ────────────────────────────────────────────────────────────────
-			// Phase 1: Parse original CBEFF
-			// ────────────────────────────────────────────────────────────────
-			long tParseStart = System.nanoTime();
 			List<BIR> originalBirs = cbeffUtil.getBIRDataFromXML(originalData);
-			long tParseEnd = System.nanoTime();
-			double parseMs = (tParseEnd - tParseStart) / 1_000_000.0;
-			mosipLogger.info("{} Parsed CBEFF → {} BIRs in {:.1f} ms",
-					logPrefix, originalBirs.size(), parseMs);
 			List<BIR> finalBirs = new ArrayList<>();
-			// ────────────────────────────────────────────────────────────────
-			// Phase 2: Parallel extraction per modality
-			// ────────────────────────────────────────────────────────────────
-			long tExtractStart = System.nanoTime();
+
 			List<CompletableFuture<List<BIR>>> extractionFutures = new ArrayList<>();
+
 			for (BiometricType modality : SUPPORTED_MODALITIES) {
-				long tModStart = System.nanoTime();
-				// Filter BIRs for this modality + exclude exceptions
 				List<BIR> birTypesForModality = originalBirs.stream()
 						.filter(bir -> {
 							List<BiometricType> types = bir.getBdbInfo().getType();
 							return !types.isEmpty() && types.get(0).value().equalsIgnoreCase(modality.value());
-						})
-						.filter(bir -> {
+						})						.filter(bir -> {
 							Map<String, String> others = bir.getOthers();
 							return others == null || "false".equalsIgnoreCase(others.get("EXCEPTION"));
 						})
 						.collect(Collectors.toList());
-				long tFilterEnd = System.nanoTime();
-				double filterMs = (tFilterEnd - tModStart) / 1_000_000.0;
 				Optional<Entry<String, String>> extractionFormatForModality = extractionFormats.entrySet().stream()
-						.filter(ent -> ent.getKey().toLowerCase().contains(modality.value().toLowerCase()))
-						.findAny();
-				if (extractionFormatForModality.isPresent() && !birTypesForModality.isEmpty()) {
+						.filter(ent -> ent.getKey().toLowerCase().contains(modality.value().toLowerCase())).findAny();
+
+				if (!extractionFormatForModality.isEmpty()&& !birTypesForModality.isEmpty()) {
 					Entry<String, String> format = extractionFormatForModality.get();
-					mosipLogger.info("{} Starting extraction → {} | {} BIRs | format key = {}, value = {}",
-							logPrefix, modality, birTypesForModality.size(), format.getKey(), format.getValue());
-					CompletableFuture<List<BIR>> future = biometricExtractionService.extractTemplate(
+					CompletableFuture<List<BIR>> extractTemplateFuture = biometricExtractionService.extractTemplate(
 							uinHash, fileName, format.getKey(), format.getValue(), birTypesForModality);
-					extractionFutures.add(future);
+					extractionFutures.add(extractTemplateFuture);
+
 				} else {
-					mosipLogger.info("{} No extraction requested or no BIRs → keeping original for {}",
-							logPrefix, modality.name());
+					mosipLogger.info(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate",
+							"GETTING NON EXTRACTED FORMAT for Modality: " + modality.name());
 					finalBirs.addAll(birTypesForModality);
 				}
-				long tModEnd = System.nanoTime();
-				double modMs = (tModEnd - tModStart) / 1_000_000.0;
-				mosipLogger.debug("{} Modality {} processing (filter + decision) took {:.1f} ms",
-						logPrefix, modality, modMs);
 			}
-			originalBirs.clear(); // release memory early
-			// Wait for all extractions
-			if (!extractionFutures.isEmpty()) {
-				long tWaitStart = System.nanoTime();
-				CompletableFuture.allOf(extractionFutures.toArray(new CompletableFuture[0])).join();
-				long tWaitEnd = System.nanoTime();
-				double waitMs = (tWaitEnd - tWaitStart) / 1_000_000.0;
-				mosipLogger.info("{} All extraction futures completed in {:.1f} ms ({} futures)",
-						logPrefix, waitMs, extractionFutures.size());
-				for (CompletableFuture<List<BIR>> future : extractionFutures) {
-					try {
-						List<BIR> extracted = future.get();
-						finalBirs.addAll(extracted);
-					} catch (Exception e) {
-						mosipLogger.error("{} One extraction future failed", logPrefix, e);
-						throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
-					}
-				}
+
+			originalBirs.clear(); // release parsed BIR list before blocking on futures - reduces live set during wait
+			CompletableFuture.allOf(extractionFutures.toArray(new CompletableFuture<?>[extractionFutures.size()]))
+					.join();
+			for (CompletableFuture<List<BIR>> future : extractionFutures) {
+				finalBirs.addAll(future.get());
 			}
-			long tExtractEnd = System.nanoTime();
-			double extractTotalMs = (tExtractEnd - tExtractStart) / 1_000_000.0;
-			mosipLogger.info("{} Extraction phase total: {:.1f} ms → {} final BIRs",
-					logPrefix, extractTotalMs, finalBirs.size());
-			// ────────────────────────────────────────────────────────────────
-			// Phase 3: Create final XML
-			// ────────────────────────────────────────────────────────────────
-			long tXmlStart = System.nanoTime();
-			byte[] result = cbeffUtil.createXML(finalBirs);
-			long tXmlEnd = System.nanoTime();
-			double xmlMs = (tXmlEnd - tXmlStart) / 1_000_000.0;
-			long overallEndNs = System.nanoTime();
-			double totalMs = (overallEndNs - overallStartNs) / 1_000_000.0;
-			mosipLogger.info("{} COMPLETE - total {:.1f} ms  (parse: {:.1f} | extract+wait: {:.1f} | xml: {:.1f})",
-					logPrefix, totalMs, parseMs, extractTotalMs, xmlMs);
-			return result;
+
+			return cbeffUtil.createXML(finalBirs);
 		} catch (IdRepoAppUncheckedException e) {
 			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate", e.getMessage());
 			throw new IdRepoAppException(e.getErrorCode(), e.getErrorText(), e);
