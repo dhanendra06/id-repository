@@ -646,31 +646,45 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 			throws IdRepoAppException {
 		try {
 			String uinHash = draft.getUinHash().split("_")[1];
-			for (UinBiometricDraft bioDraft : draft.getBiometrics()) {
-				String bioFileId = bioDraft.getBioFileId();
 
-				// Deletes (N formats) and source-bio load are independent — run them in parallel.
-				// Deletes must finish before extraction starts (otherwise tryLoadFromObjectStore
-				// would find the stale cached extraction and return it instead of re-extracting).
-				// Source load can overlap with deletes — it reads the original bio file, not
-				// any extracted file, so there is no ordering dependency.
-				CompletableFuture<Void> deleteFuture = CompletableFuture.runAsync(
-						() -> deleteExistingExtractedBioData(extractionFormats, uinHash, bioDraft),
-						bioExecutor);
+			// All bios run concurrently. Per-bio ordering:
+			//   delete (parallel formats) ─┐
+			//                              ├─► both done → extraction
+			//   source bio load ───────────┘
+			List<CompletableFuture<Void>> bioFutures = draft.getBiometrics().stream()
+					.map(bioDraft -> {
+						String bioFileId = bioDraft.getBioFileId();
 
-				CompletableFuture<byte[]> sourceFuture = CompletableFuture.supplyAsync(
-						() -> {
-							try {
-								return super.objectStoreHelper.getBiometricObject(uinHash, bioFileId);
-							} catch (IdRepoAppException e) {
-								throw new CompletionException(e);
-							}
-						}, bioExecutor);
+						CompletableFuture<Void> deleteFuture = CompletableFuture.runAsync(
+								() -> deleteExistingExtractedBioData(extractionFormats, uinHash, bioDraft),
+								bioExecutor);
 
-				// Wait for deletes first, then use the already-loaded source bytes
-				deleteFuture.join();
-				proxyService.getBiometricsForRequestedFormats(uinHash, bioFileId, extractionFormats, sourceFuture.join());
-			}
+						CompletableFuture<byte[]> sourceFuture = CompletableFuture.supplyAsync(
+								() -> {
+									try {
+										return super.objectStoreHelper.getBiometricObject(uinHash, bioFileId);
+									} catch (IdRepoAppException e) {
+										throw new CompletionException(e);
+									}
+								}, bioExecutor);
+
+						// thenCombine waits for both delete and source load to finish,
+						// then runs extraction on a new virtual thread.
+						return deleteFuture
+								.thenCombine(sourceFuture, (ignored, sourceBytes) -> sourceBytes)
+								.thenAcceptAsync(sourceBytes -> {
+									try {
+										proxyService.getBiometricsForRequestedFormats(
+												uinHash, bioFileId, extractionFormats, sourceBytes);
+									} catch (IdRepoAppException e) {
+										throw new CompletionException(e);
+									}
+								}, bioExecutor);
+					})
+					.collect(Collectors.toList());
+
+			CompletableFuture.allOf(bioFutures.toArray(new CompletableFuture[0])).join();
+
 		} catch (CompletionException e) {
 			Throwable cause = e.getCause();
 			String msg = cause != null ? cause.getMessage() : e.getMessage();

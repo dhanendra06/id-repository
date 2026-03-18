@@ -7,6 +7,10 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -46,6 +50,7 @@ import org.skyscreamer.jsonassert.JSONCompare;
 import org.skyscreamer.jsonassert.JSONCompareMode;
 import org.skyscreamer.jsonassert.JSONCompareResult;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -213,6 +218,10 @@ public class IdRepoServiceImpl implements IdRepoService<IdRequestDTO, Uin> {
 	@Autowired
 	private IdRepoServiceHelper idRepoServiceHelper;
 
+	@Autowired(required = false)
+	@Qualifier("bioExtractionExecutor")
+	protected Executor bioExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
 	@Value("${" + UIN_REFID + "}")
 	private String uinRefId;
 
@@ -303,21 +312,41 @@ public class IdRepoServiceImpl implements IdRepoService<IdRequestDTO, Uin> {
 	private void addDocuments(String uinHash, byte[] identityInfo, List<DocumentsDTO> documents, String uinRefId,
 			List<UinDocument> docList, List<UinBiometric> bioList, boolean isDraft) {
 		ObjectNode identityObject = convertToObject(identityInfo, ObjectNode.class);
-		IntStream.range(0, documents.size()).filter(index -> identityObject.has(documents.get(index).getCategory())).forEach(index -> {
-			DocumentsDTO doc = documents.get(index);
-			JsonNode docType = identityObject.get(doc.getCategory());
-			try {
-				if (bioAttributes.contains(doc.getCategory())) {
-					addBiometricDocuments(uinHash, uinRefId, bioList, doc, docType, isDraft, index);
-					anonymousProfileHelper.setNewCbeff(doc.getValue());
-				} else {
-					addDemographicDocuments(uinHash, uinRefId, docList, doc, docType, isDraft);
-				}
-			} catch (IdRepoAppException e) {
-				mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, ADD_IDENTITY, e.getMessage());
-				throw new IdRepoAppUncheckedException(e.getErrorCode(), e.getErrorText(), e);
-			}
-		});
+
+		// Thread-safe wrappers — multiple upload futures add to these concurrently
+		List<UinDocument> syncDocList = Collections.synchronizedList(docList);
+		List<UinBiometric> syncBioList = Collections.synchronizedList(bioList);
+
+		// Upload all documents (encrypt + S3 PUT) in parallel
+		List<CompletableFuture<Void>> uploadFutures = new ArrayList<>();
+		IntStream.range(0, documents.size())
+				.filter(index -> identityObject.has(documents.get(index).getCategory()))
+				.forEach(index -> {
+					DocumentsDTO doc = documents.get(index);
+					JsonNode docType = identityObject.get(doc.getCategory());
+					uploadFutures.add(CompletableFuture.runAsync(() -> {
+						try {
+							if (bioAttributes.contains(doc.getCategory())) {
+								addBiometricDocuments(uinHash, uinRefId, syncBioList, doc, docType, isDraft, index);
+								anonymousProfileHelper.setNewCbeff(doc.getValue());
+							} else {
+								addDemographicDocuments(uinHash, uinRefId, syncDocList, doc, docType, isDraft);
+							}
+						} catch (IdRepoAppException e) {
+							mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, ADD_IDENTITY, e.getMessage());
+							throw new IdRepoAppUncheckedException(e.getErrorCode(), e.getErrorText(), e);
+						}
+					}, bioExecutor));
+				});
+
+		try {
+			CompletableFuture.allOf(uploadFutures.toArray(new CompletableFuture[0])).join();
+		} catch (CompletionException e) {
+			Throwable cause = e.getCause();
+			if (cause instanceof IdRepoAppUncheckedException) throw (IdRepoAppUncheckedException) cause;
+			if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+			throw new IdRepoAppUncheckedException(UNKNOWN_ERROR.getErrorCode(), e.getMessage(), e);
+		}
 	}
 
 	/**
@@ -806,26 +835,53 @@ public class IdRepoServiceImpl implements IdRepoService<IdRequestDTO, Uin> {
 	 * @throws IdRepoAppException the id repo app exception
 	 */
 	private void updateCbeff(Uin uinObject, RequestDTO requestDTO) {
+		if (uinObject.getUinHash() == null || uinObject.getBiometrics() == null || uinObject.getBiometrics().isEmpty()) return;
+		String uinHash = uinObject.getUinHash().split("_")[1];
 		ObjectNode identityMap = convertToObject(uinObject.getUinData(), ObjectNode.class);
+
+		// Pre-load all matching bio data in parallel (S3 GET + decrypt per bio)
+		Map<String, CompletableFuture<byte[]>> bioFutures = new HashMap<>();
+		for (UinBiometric bio : uinObject.getBiometrics()) {
+			if (requestDTO.getDocuments().stream()
+					.anyMatch(doc -> StringUtils.equals(bio.getBiometricFileType(), doc.getCategory()))) {
+				String bioFileId = bio.getBioFileId();
+				bioFutures.put(bioFileId, CompletableFuture.supplyAsync(() -> {
+					try {
+						return objectStoreHelper.getBiometricObject(uinHash, bioFileId);
+					} catch (IdRepoAppException e) {
+						throw new CompletionException(e);
+					}
+				}, bioExecutor));
+			}
+		}
+
+		// Process results sequentially — safe for doc.setValue / setOldCbeff mutations
 		IntStream.range(0, uinObject.getBiometrics().size()).forEach(index -> {
 			UinBiometric bio = uinObject.getBiometrics().get(index);
 			requestDTO.getDocuments().stream()
 					.filter(doc -> StringUtils.equals(bio.getBiometricFileType(), doc.getCategory())).forEach(doc -> {
 						try {
-							String uinHash = uinObject.getUinHash().split("_")[1];
-							String bioFileId = bio.getBioFileId();
-							byte[] data = objectStoreHelper.getBiometricObject(uinHash, bioFileId);
-								if (StringUtils.equalsIgnoreCase(
-										identityMap.get(bio.getBiometricFileType()).get(FILE_FORMAT_ATTRIBUTE).asText(), CBEFF_FORMAT)
-										&& bioFileId.endsWith(CBEFF_FORMAT)) {
-									byte[] decodedBioData = CryptoUtil.decodeURLSafeBase64(doc.getValue());
-									anonymousProfileHelper.setOldCbeff(CryptoUtil.encodeToURLSafeBase64(data));
-									doc.setValue(CryptoUtil.encodeToURLSafeBase64(this.updateXML(decodedBioData, data)));
-								}
+							CompletableFuture<byte[]> future = bioFutures.get(bio.getBioFileId());
+							if (future == null) return;
+							byte[] data = future.join();
+							if (StringUtils.equalsIgnoreCase(
+									identityMap.get(bio.getBiometricFileType()).get(FILE_FORMAT_ATTRIBUTE).asText(), CBEFF_FORMAT)
+									&& bio.getBioFileId().endsWith(CBEFF_FORMAT)) {
+								byte[] decodedBioData = CryptoUtil.decodeURLSafeBase64(doc.getValue());
+								anonymousProfileHelper.setOldCbeff(CryptoUtil.encodeToURLSafeBase64(data));
+								doc.setValue(CryptoUtil.encodeToURLSafeBase64(this.updateXML(decodedBioData, data)));
+							}
 						} catch (IdRepoAppUncheckedException e) {
 							mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "updateCbeff",
 									ExceptionUtils.getStackTrace(e));
-							throw new IdRepoAppUncheckedException(e.getErrorCode(), e.getErrorText(), e);
+							throw e;
+						} catch (CompletionException e) {
+							Throwable cause = e.getCause();
+							if (cause instanceof IdRepoAppUncheckedException) throw (IdRepoAppUncheckedException) cause;
+							mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "updateCbeff",
+									e.getMessage());
+							throw new IdRepoAppUncheckedException(INVALID_INPUT_PARAMETER.getErrorCode(),
+									String.format(INVALID_INPUT_PARAMETER.getErrorMessage(), "documents/" + index + "/value"));
 						} catch (Exception e) {
 							mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "updateCbeff",
 									ExceptionUtils.getStackTrace(e));
