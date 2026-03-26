@@ -69,27 +69,28 @@ public class BiometricExtractionServiceImplTest {
 
 	@Test
 	public void testExtractTemplateExtractionNotExists() throws Exception {
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(false);
+		// O4: cache miss is signalled by FILE_NOT_FOUND, not by biometricObjectExists=false
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_NOT_FOUND));
 		String cbeff = IOUtils.toString(this.getClass().getClassLoader().getResourceAsStream("test-cbeff.xml"),
 				StandardCharsets.UTF_8);
 		List<BIR> birDataFromXMLType = CbeffValidator.getBIRDataFromXMLType(CryptoUtil.decodeURLSafeBase64(cbeff),
 				"Finger");
-		when(objectStoreHelper.getBiometricObject(any(), any())).thenReturn(CryptoUtil.decodeURLSafeBase64(cbeff));
-		when(cbeffUtil.getBIRDataFromXML(any())).thenReturn(birDataFromXMLType);
 		when(bioExractionHelper.extractTemplates(any(), any())).thenReturn(birDataFromXMLType);
+		when(cbeffUtil.createXML(any())).thenReturn(new byte[0]);
 		CompletableFuture<List<BIR>> extractTemplate = extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
 		assertEquals(birDataFromXMLType.size(), extractTemplate.join().size());
 	}
 
 	@Test
 	public void testExtractTemplateExtractedBioIsEmpty() throws Exception {
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(false);
+		// O4: cache miss is signalled by FILE_NOT_FOUND, not by biometricObjectExists=false
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_NOT_FOUND));
 		String cbeff = IOUtils.toString(this.getClass().getClassLoader().getResourceAsStream("test-cbeff.xml"),
 				StandardCharsets.UTF_8);
 		List<BIR> birDataFromXMLType = CbeffValidator.getBIRDataFromXMLType(CryptoUtil.decodeURLSafeBase64(cbeff),
 				"Finger");
-		when(objectStoreHelper.getBiometricObject(any(), any())).thenReturn(CryptoUtil.decodeURLSafeBase64(cbeff));
-		when(cbeffUtil.getBIRDataFromXML(any())).thenReturn(birDataFromXMLType);
 		when(bioExractionHelper.extractTemplates(any(), any())).thenReturn(List.of());
 		CompletableFuture<List<BIR>> extractTemplate = extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
 		assertEquals(0, extractTemplate.join().size());
@@ -98,30 +99,30 @@ public class BiometricExtractionServiceImplTest {
 
 	@Test
 	public void testExtractTemplateObjectStoreFailure() throws Exception {
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(true);
+		// ObjectStoreAdapterException on GET falls through to extraction (logged, not rethrown)
+		when(objectStoreHelper.getBiometricObject(any(), any())).thenThrow(new ObjectStoreAdapterException("", ""));
 		String cbeff = IOUtils.toString(this.getClass().getClassLoader().getResourceAsStream("test-cbeff.xml"),
 				StandardCharsets.UTF_8);
 		List<BIR> birDataFromXMLType = CbeffValidator.getBIRDataFromXMLType(CryptoUtil.decodeURLSafeBase64(cbeff),
 				"Finger");
-		when(objectStoreHelper.getBiometricObject(any(), any())).thenThrow(new ObjectStoreAdapterException("", ""));
-		when(cbeffUtil.getBIRDataFromXML(any())).thenReturn(birDataFromXMLType);
 		when(bioExractionHelper.extractTemplates(any(), any())).thenReturn(birDataFromXMLType);
+		when(cbeffUtil.createXML(any())).thenReturn(new byte[0]);
 		CompletableFuture<List<BIR>> extractTemplate = extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
 		assertEquals(birDataFromXMLType.size(), extractTemplate.join().size());
 	}
 
 	@Test
 	public void testExtractTemplateBioExtractionFailure() throws Exception {
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(false);
+		// O4: cache miss → FILE_NOT_FOUND, then SDK extraction throws
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_NOT_FOUND));
 		String cbeff = IOUtils.toString(this.getClass().getClassLoader().getResourceAsStream("test-cbeff.xml"),
 				StandardCharsets.UTF_8);
 		List<BIR> birDataFromXMLType = CbeffValidator.getBIRDataFromXMLType(CryptoUtil.decodeURLSafeBase64(cbeff),
 				"Finger");
-		when(objectStoreHelper.getBiometricObject(any(), any())).thenReturn(CryptoUtil.decodeURLSafeBase64(cbeff));
-		when(cbeffUtil.getBIRDataFromXML(any())).thenReturn(birDataFromXMLType);
 		when(bioExractionHelper.extractTemplates(any(), any())).thenThrow(new BiometricExtractionException(IdRepoErrorConstants.UNKNOWN_ERROR));
 		try {
-		extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
+			extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
 		} catch (IdRepoAppException e) {
 			assertEquals(IdRepoErrorConstants.BIO_EXTRACTION_ERROR.getErrorCode(), e.getErrorCode());
 			assertEquals(IdRepoErrorConstants.BIO_EXTRACTION_ERROR.getErrorMessage(), e.getErrorText());
@@ -130,16 +131,16 @@ public class BiometricExtractionServiceImplTest {
 
 	@Test
 	public void testExtractTemplateUnknownError() throws Exception {
-		when(objectStoreHelper.biometricObjectExists(any(), any())).thenReturn(false);
+		// O4: cache miss → FILE_NOT_FOUND, then an unexpected runtime exception is wrapped as UNKNOWN_ERROR
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_NOT_FOUND));
 		String cbeff = IOUtils.toString(this.getClass().getClassLoader().getResourceAsStream("test-cbeff.xml"),
 				StandardCharsets.UTF_8);
 		List<BIR> birDataFromXMLType = CbeffValidator.getBIRDataFromXMLType(CryptoUtil.decodeURLSafeBase64(cbeff),
 				"Finger");
-		when(objectStoreHelper.getBiometricObject(any(), any())).thenReturn(CryptoUtil.decodeURLSafeBase64(cbeff));
-		when(cbeffUtil.getBIRDataFromXML(any())).thenReturn(birDataFromXMLType);
 		when(bioExractionHelper.extractTemplates(any(), any())).thenThrow(new NullPointerException());
 		try {
-		extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
+			extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
 		} catch (IdRepoAppException e) {
 			assertEquals(IdRepoErrorConstants.UNKNOWN_ERROR.getErrorCode(), e.getErrorCode());
 			assertEquals(IdRepoErrorConstants.UNKNOWN_ERROR.getErrorMessage(), e.getErrorText());

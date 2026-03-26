@@ -72,13 +72,13 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 	/** The id. */
 	private Map<String, String> id;
 
-    @Value("${mosip.idrepo.extract.template.core-pool-size:50}")
+    @Value("${mosip.idrepo.extract.template.core-pool-size:20}")
     private int corePoolSize;
 
-    @Value("${mosip.idrepo.extract.template.max-pool-size:100}")
+    @Value("${mosip.idrepo.extract.template.max-pool-size:40}")
     private int maxPoolSize;
 
-    @Value("${mosip.idrepo.extract.template.queue-capacity:1000}")
+    @Value("${mosip.idrepo.extract.template.queue-capacity:40}")
     private int queueCapacity;
 
 	/**
@@ -248,11 +248,14 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 			ThreadPoolTaskExecutor webSubHelperExecutor = (ThreadPoolTaskExecutor) webSubHelperExecutor();
 			ThreadPoolTaskExecutor credentialStatusManagerJobExecutor = (ThreadPoolTaskExecutor) credentialStatusManagerJobExecutor();
 			ThreadPoolTaskExecutor anonymousProfileExecutor = (ThreadPoolTaskExecutor) anonymousProfileExecutor();
+			// bioExtractionThreadPool() is the most critical pool — drives all async biometric extraction.
+			ThreadPoolTaskExecutor bioExtractionExecutor = bioExtractionThreadPool();
 			String monitoringLog = "Thread Name : {} Thread Active Count: {} Thread Task count: {} Thread queue count: {}";
 			logThreadQueueDetails(threadPoolTaskExecutor, threadPoolTaskExecutor.getThreadPoolExecutor().getQueue().size(), monitoringLog);
 			logThreadQueueDetails(webSubHelperExecutor, webSubHelperExecutor.getThreadPoolExecutor().getQueue().size(), monitoringLog);
 			logThreadQueueDetails(credentialStatusManagerJobExecutor, credentialStatusManagerJobExecutor.getThreadPoolExecutor().getQueue().size(), monitoringLog);
 			logThreadQueueDetails(anonymousProfileExecutor, anonymousProfileExecutor.getThreadPoolExecutor().getQueue().size(), monitoringLog);
+			logThreadQueueDetails(bioExtractionExecutor, bioExtractionExecutor.getThreadPoolExecutor().getQueue().size(), monitoringLog);
 		}
 	}
 
@@ -271,15 +274,22 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 	 */
 	@Bean("withSecurityContext")
 	public DelegatingSecurityContextAsyncTaskExecutor taskExecutor() {
-		return new DelegatingSecurityContextAsyncTaskExecutor(threadPoolTaskExecutor());
+		// Delegates to the named @Bean so CGLIB returns the same singleton used by monitoring.
+		return new DelegatingSecurityContextAsyncTaskExecutor(bioExtractionThreadPool());
 	}
 
-	private ThreadPoolTaskExecutor threadPoolTaskExecutor() {
+	/**
+	 * Thread pool backing the "withSecurityContext" executor used for all async biometric
+	 * template extraction.  Exposed as a named @Bean so that monitorThreadQueueLimit() can
+	 * retrieve the same singleton via the CGLIB proxy rather than allocating a new instance.
+	 */
+	@Bean("bioExtractionThreadPool")
+	public ThreadPoolTaskExecutor bioExtractionThreadPool() {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 		executor.setCorePoolSize(corePoolSize);
 		executor.setMaxPoolSize(maxPoolSize);
 		executor.setQueueCapacity(queueCapacity);
-		executor.setThreadNamePrefix("idrepo-");
+		executor.setThreadNamePrefix("idrepo-bio-extract-");
 		executor.initialize();
 		return executor;
 	}

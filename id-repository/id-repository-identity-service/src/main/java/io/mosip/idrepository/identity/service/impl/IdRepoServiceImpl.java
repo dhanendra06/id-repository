@@ -139,6 +139,12 @@ public class IdRepoServiceImpl implements IdRepoService<IdRequestDTO, Uin> {
 	
 	private static final String RETRIEVE_IDENTITY = "retrieveIdentity";
 
+	/** Shared, thread-safe JSONPath configuration — built once at class-load time (O1). */
+	protected static final Configuration JSONPATH_CONFIG = Configuration.builder()
+			.jsonProvider(new JacksonJsonProvider())
+			.mappingProvider(new JacksonMappingProvider())
+			.build();
+
 	/** The env. */
 	@Autowired
 	protected EnvUtil env;
@@ -434,10 +440,8 @@ public class IdRepoServiceImpl implements IdRepoService<IdRequestDTO, Uin> {
 			}
 			if (Objects.nonNull(request.getRequest()) && Objects.nonNull(request.getRequest().getIdentity())) {
 				RequestDTO requestDTO = request.getRequest();
-				Configuration configuration = Configuration.builder().jsonProvider(new JacksonJsonProvider())
-						.mappingProvider(new JacksonMappingProvider()).build();
-				DocumentContext inputData = JsonPath.using(configuration).parse(requestDTO.getIdentity());
-				DocumentContext dbData = JsonPath.using(configuration).parse(new String(uinObject.getUinData()));
+				DocumentContext inputData = JsonPath.using(JSONPATH_CONFIG).parse(requestDTO.getIdentity());
+				DocumentContext dbData = JsonPath.using(JSONPATH_CONFIG).parse(new String(uinObject.getUinData(), java.nio.charset.StandardCharsets.UTF_8));
 				anonymousProfileHelper.setOldUinData(uinObject.getUinData()); // reuse existing bytes - no copy needed
 				updateVerifiedAttributes(requestDTO, inputData, dbData);
 				replaceConfiguredFieldsOnUpdate(inputData, dbData);

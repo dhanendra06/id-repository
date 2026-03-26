@@ -83,17 +83,15 @@ public class ObjectStoreHelper {
 	}
 
 	public byte[] getBiometricObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		if (!this.biometricObjectExists(uinHash, fileRefId)) {
-			throw new IdRepoAppException(FILE_NOT_FOUND);
-		}
+		// No existence pre-check: getObject() throws FILE_NOT_FOUND if the stream is null,
+		// avoiding a redundant HEAD round-trip to the object store (O3).
 		return getObject(uinHash, true, fileRefId, bioDataRefId);
 	}
 
 	public void deleteBiometricObject(String uinHash, String fileRefId)  {
-		if (this.biometricObjectExists(uinHash, fileRefId)) {
-			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
-			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
-		}
+		// Object store deletes are idempotent; skip the existence pre-check HEAD request (O3).
+		String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
+		objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
 	}
 
 	private boolean exists(String uinHash, boolean isBio, String fileRefId)  {

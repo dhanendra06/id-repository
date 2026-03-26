@@ -56,10 +56,12 @@ import org.skyscreamer.jsonassert.JSONCompareMode;
 import org.skyscreamer.jsonassert.JSONCompareResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.env.Environment;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.TransactionException;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.BeanPropertyBindingResult;
 import org.springframework.validation.Errors;
@@ -144,6 +146,15 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	
 	@Autowired
 	private VidDraftHelper vidDraftHelper;
+
+	/**
+	 * Self-proxy reference used by publishDraft (O9) to invoke doPublishDraft() through
+	 * the Spring AOP proxy so that its @Transactional annotation is honoured.
+	 * @Lazy breaks the circular dependency introduced by the self-reference.
+	 */
+	@Lazy
+	@Autowired
+	private IdRepoDraftServiceImpl selfProxy;
 
 	@Autowired
 	private Environment environment;
@@ -268,17 +279,16 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	private void updateDemographicData(IdRequestDTO request, UinDraft draftToUpdate) throws JSONException, IdRepoAppException, IOException {
 		if (Objects.nonNull(request.getRequest()) && Objects.nonNull(request.getRequest().getIdentity())) {
 			RequestDTO requestDTO = request.getRequest();
-			Configuration configuration = Configuration.builder().jsonProvider(new JacksonJsonProvider()).mappingProvider(new JacksonMappingProvider()).build();
-			DocumentContext inputData = JsonPath.using(configuration).parse(requestDTO.getIdentity());
-			DocumentContext dbData = JsonPath.using(configuration).parse(new String(draftToUpdate.getUinData()));
-			JsonPath uinJsonPath = JsonPath.compile(uinPath.replace(ROOT_PATH, "$"));
+			DocumentContext inputData = JsonPath.using(JSONPATH_CONFIG).parse(requestDTO.getIdentity());
+			DocumentContext dbData = JsonPath.using(JSONPATH_CONFIG).parse(new String(draftToUpdate.getUinData(), StandardCharsets.UTF_8));
 			super.updateVerifiedAttributes(requestDTO, inputData, dbData);
 			JSONCompareResult comparisonResult = JSONCompare.compareJSON(inputData.jsonString(), dbData.jsonString(),
 					JSONCompareMode.LENIENT);
 			if (comparisonResult.failed()) {
 				super.updateJsonObject(draftToUpdate.getUinHash(), inputData, dbData, comparisonResult, false);
 			}
-			draftToUpdate.setUinData(convertToBytes(convertToObject(dbData.jsonString().getBytes(), Map.class)));
+			// O8: dbData.jsonString() is already the live document — no Map round-trip needed.
+			draftToUpdate.setUinData(dbData.jsonString().getBytes(StandardCharsets.UTF_8));
 			draftToUpdate.setUinDataHash(securityManager.hash(draftToUpdate.getUinData()));
 			draftToUpdate.setUpdatedBy(IdRepoSecurityManager.getUser());
 			draftToUpdate.setUpdatedDateTime(DateUtils2.getUTCCurrentDateTime());
@@ -355,44 +365,73 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		draftToUpdate.getDocuments().forEach(doc -> doc.setRegId(regId));
 	}
 
+	/**
+	 * O9: publishDraft is intentionally NOT_SUPPORTED so no DB connection is held
+	 * while the two external VID REST calls execute.  All DB writes are delegated to
+	 * doPublishDraft() which is called via selfProxy so that Spring's @Transactional
+	 * interceptor starts a short-lived, focused transaction for only the DB work.
+	 *
+	 * Risk note: if activateDraftVid() fails after doPublishDraft() commits, the VID
+	 * remains in DRAFT status.  The VID service must be idempotent / retryable, or a
+	 * compensating re-activation must be triggered externally.
+	 */
 	@Override
+	@Transactional(propagation = Propagation.NOT_SUPPORTED)
 	public IdResponseDTO publishDraft(String regId) throws IdRepoAppException {
 		anonymousProfileHelper.setRegId(regId);
 		try {
-			String draftVid = null;
 			Optional<UinDraft> uinDraft = uinDraftRepo.findByRegId(regId);
 			if (uinDraft.isEmpty()) {
 				idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, PUBLISH_DRAFT,
 						DRAFT_RECORD_NOT_FOUND);
 				throw new IdRepoAppException(NO_RECORD_FOUND);
-			} else {
-				UinDraft draft = uinDraft.get();
-				anonymousProfileHelper
+			}
+			UinDraft draft = uinDraft.get();
+			String uin = decryptUin(draft.getUin(), draft.getUinHash());
+			boolean isNewIdentity = !uinRepo.existsByUinHash(draft.getUinHash());
+
+			// Generate VID before opening the DB transaction so no connection is held during the HTTP call.
+			String draftVid = isNewIdentity ? vidDraftHelper.generateDraftVid(uin) : null;
+
+			// Execute all DB writes in a short-lived transaction via the Spring proxy.
+			Uin uinObject = selfProxy.doPublishDraft(regId, draft, uin, isNewIdentity);
+
+			// Activate VID after the transaction has committed.
+			if (draftVid != null) {
+				vidDraftHelper.activateDraftVid(draftVid);
+			}
+			return constructIdResponse(null, uinObject.getStatusCode(), null, draftVid);
+		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
+			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, PUBLISH_DRAFT, e.getMessage());
+			throw new IdRepoAppException(DATABASE_ACCESS_ERROR, e);
+		}
+	}
+
+	/**
+	 * Executes all database writes for a draft publication inside a dedicated transaction.
+	 * Called exclusively via selfProxy from publishDraft() to ensure the Spring AOP
+	 * interceptor applies @Transactional (self-invocation does not go through the proxy).
+	 */
+	@Transactional(rollbackFor = { IdRepoAppException.class, IdRepoAppUncheckedException.class })
+	public Uin doPublishDraft(String regId, UinDraft draft, String uin, boolean isNewIdentity) throws IdRepoAppException {
+		anonymousProfileHelper
 				.setNewCbeff(draft.getUinHash().split("_")[1],
 						!anonymousProfileHelper.isNewCbeffPresent() && Objects.nonNull(draft.getBiometrics())
 						&& !draft.getBiometrics().isEmpty()
 						? draft.getBiometrics().get(draft.getBiometrics().size() - 1).getBioFileId()
 								: null);
-				IdRequestDTO idRequest = buildRequest(regId, draft);
-				validateRequest(idRequest.getRequest());
-				String uin = decryptUin(draft.getUin(), draft.getUinHash());
-				final Uin uinObject;
-				if (uinRepo.existsByUinHash(draft.getUinHash())) {
-					uinObject = super.updateIdentity(idRequest, uin);
-				} else {
-					draftVid = vidDraftHelper.generateDraftVid(uin);
-					uinObject = super.addIdentity(idRequest, uin);
-					vidDraftHelper.activateDraftVid(draftVid);
-				}
-				anonymousProfileHelper.buildAndsaveProfile(true);
-				publishDocuments(draft, uinObject);
-				this.discardDraft(regId);
-				return constructIdResponse(null, uinObject.getStatusCode(), null, draftVid);
-			}
-		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
-			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, PUBLISH_DRAFT, e.getMessage());
-			throw new IdRepoAppException(DATABASE_ACCESS_ERROR, e);
+		IdRequestDTO idRequest = buildRequest(regId, draft);
+		validateRequest(idRequest.getRequest());
+		final Uin uinObject;
+		if (isNewIdentity) {
+			uinObject = super.addIdentity(idRequest, uin);
+		} else {
+			uinObject = super.updateIdentity(idRequest, uin);
 		}
+		anonymousProfileHelper.buildAndsaveProfile(true);
+		publishDocuments(draft, uinObject);
+		this.discardDraft(regId);
+		return uinObject;
 	}
 
 	/**
@@ -545,11 +584,10 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	}
 
 	private void deleteExistingExtractedBioData(Map<String, String> extractionFormats, String uinHash, UinBiometricDraft bioDraft) {
-		extractionFormats.entrySet()
-				.forEach(extractionFormat -> {
-                    super.objectStoreHelper.deleteBiometricObject(uinHash,
-                            buildExtractionFileName(extractionFormat, bioDraft.getBioFileId()));
-                });
+		// O5: deletions per format are independent — run them in parallel to avoid sequential round-trips.
+		extractionFormats.entrySet().parallelStream().forEach(extractionFormat ->
+				super.objectStoreHelper.deleteBiometricObject(uinHash,
+						buildExtractionFileName(extractionFormat, bioDraft.getBioFileId())));
 	}
 
 	private byte[] extractAndGetCombinedCbeff(String uinHash, String bioFileId, Map<String, String> extractionFormats)
@@ -611,8 +649,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		String resultString = new String(uinData, StandardCharsets.UTF_8);
 		String excludedAttributeListProperty = environment.getProperty(EXCLUDED_ATTRIBUTE_LIST, DEFAULT_ATTRIBUTE_LIST);
 		List<String> excludedListPropertyList = List.of(excludedAttributeListProperty.split(COMMA));
-		ObjectMapper objectMapper = new ObjectMapper();
-		JsonNode jsonNode = objectMapper.readTree(resultString);
+		JsonNode jsonNode = mapper.readTree(resultString); // O6: reuse shared mapper bean instead of allocating a new ObjectMapper
 		jsonNode.fieldNames().forEachRemaining(key -> {
 			if(!excludedListPropertyList.contains(key)){
 				attributeList.add(key);

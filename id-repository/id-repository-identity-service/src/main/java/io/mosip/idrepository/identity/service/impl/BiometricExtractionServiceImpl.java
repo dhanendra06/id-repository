@@ -3,6 +3,7 @@ package io.mosip.idrepository.identity.service.impl;
 import static io.mosip.idrepository.core.constant.IdRepoConstants.DOT;
 import static io.mosip.idrepository.core.constant.IdRepoConstants.EXTRACTION_FORMAT_QUERY_PARAM_SUFFIX;
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.BIO_EXTRACTION_ERROR;
+import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.FILE_NOT_FOUND;
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.UNKNOWN_ERROR;
 
 import java.util.List;
@@ -72,15 +73,19 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 			String extractionType, String extractionFormat, List<BIR> birsForModality) throws IdRepoAppException {
 		try {
 			String extractionFileName = fileName.split("\\.")[0] + DOT + getModalityForFormat(extractionType) + DOT + extractionFormat;
+			// O4: attempt a direct GET instead of HEAD-then-GET; FILE_NOT_FOUND == cache miss.
 			try {
-				if (objectStoreHelper.biometricObjectExists(uinHash, extractionFileName)) {
-					mosipLogger.info(IdRepoSecurityManager.getUser(), this.getClass().getSimpleName(), EXTRACT_TEMPLATE,
-							"RETURNING EXISTING EXTRACTED BIOMETRICS FOR FORMAT: " + extractionType +" : "+ extractionFormat);
-					byte[] xmlBytes = objectStoreHelper.getBiometricObject(uinHash, extractionFileName);
-					List<BIR> existingBirs = cbeffUtil.getBIRDataFromXML(xmlBytes);
-					xmlBytes = null; // release large byte array before returning; BIR objects are much smaller
-					return CompletableFuture.completedFuture(existingBirs);
+				byte[] xmlBytes = objectStoreHelper.getBiometricObject(uinHash, extractionFileName);
+				mosipLogger.info(IdRepoSecurityManager.getUser(), this.getClass().getSimpleName(), EXTRACT_TEMPLATE,
+						"RETURNING EXISTING EXTRACTED BIOMETRICS FOR FORMAT: " + extractionType +" : "+ extractionFormat);
+				List<BIR> existingBirs = cbeffUtil.getBIRDataFromXML(xmlBytes);
+				xmlBytes = null; // release large byte array before returning; BIR objects are much smaller
+				return CompletableFuture.completedFuture(existingBirs);
+			} catch (IdRepoAppException e) {
+				if (!FILE_NOT_FOUND.getErrorCode().equals(e.getErrorCode())) {
+					throw e; // unexpected error — propagate
 				}
+				// FILE_NOT_FOUND = cache miss; fall through to extract
 			} catch (ObjectStoreAdapterException e) {
 				mosipLogger.error(IdRepoSecurityManager.getUser(), this.getClass().getSimpleName(), EXTRACT_TEMPLATE,
 						e.getMessage());
