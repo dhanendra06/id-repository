@@ -72,13 +72,13 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 	/** The id. */
 	private Map<String, String> id;
 
-    @Value("${mosip.idrepo.extract.template.core-pool-size:50}")
+    @Value("${mosip.idrepo.extract.template.core-pool-size:5}")
     private int corePoolSize;
 
-    @Value("${mosip.idrepo.extract.template.max-pool-size:100}")
+    @Value("${mosip.idrepo.extract.template.max-pool-size:10}")
     private int maxPoolSize;
 
-    @Value("${mosip.idrepo.extract.template.queue-capacity:1000}")
+    @Value("${mosip.idrepo.extract.template.queue-capacity:50}")
     private int queueCapacity;
 
 	/**
@@ -199,6 +199,7 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 	    ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 	    executor.setCorePoolSize(Math.floorDiv(EnvUtil.getActiveAsyncThreadCount(), 4));
 	    executor.setMaxPoolSize(EnvUtil.getActiveAsyncThreadCount());
+	    executor.setQueueCapacity(100);
 	    executor.setThreadNamePrefix("idrepo-identity-");
 	    executor.setWaitForTasksToCompleteOnShutdown(true);
 	    executor.initialize();
@@ -211,8 +212,9 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 	    ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 	    executor.setCorePoolSize(Math.floorDiv(EnvUtil.getActiveAsyncThreadCount(), 4));
 	    executor.setMaxPoolSize(EnvUtil.getActiveAsyncThreadCount());
+	    executor.setQueueCapacity(50);
 	    executor.setThreadNamePrefix("idrepo-websub-");
-	    executor.setWaitForTasksToCompleteOnShutdown(true);
+	    executor.setWaitForTasksToCompleteOnShutdown(false);
 	    executor.initialize();
 	    return executor;
 	}
@@ -223,6 +225,7 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 	    ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 	    executor.setCorePoolSize(Math.floorDiv(EnvUtil.getActiveAsyncThreadCount(), 4));
 	    executor.setMaxPoolSize(EnvUtil.getActiveAsyncThreadCount());
+	    executor.setQueueCapacity(100);
 	    executor.setThreadNamePrefix("idrepo-cred-status-job-");
 	    executor.setWaitForTasksToCompleteOnShutdown(true);
 	    executor.initialize();
@@ -235,8 +238,9 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 	    ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 	    executor.setCorePoolSize(Math.floorDiv(EnvUtil.getActiveAsyncThreadCount(), 4));
 	    executor.setMaxPoolSize(EnvUtil.getActiveAsyncThreadCount());
+	    executor.setQueueCapacity(50);
 	    executor.setThreadNamePrefix("idrepo-identity-anonymousprofile-");
-	    executor.setWaitForTasksToCompleteOnShutdown(true);
+	    executor.setWaitForTasksToCompleteOnShutdown(false);
 	    executor.initialize();
 	    return executor;
 	}
@@ -279,7 +283,7 @@ public class IdRepoConfig extends IdRepoDataSourceConfig
 		executor.setCorePoolSize(corePoolSize);
 		executor.setMaxPoolSize(maxPoolSize);
 		executor.setQueueCapacity(queueCapacity);
-		executor.setThreadNamePrefix("idrepo-");
+		executor.setThreadNamePrefix("idrepo-bio-extract-");
 		executor.initialize();
 		return executor;
 	}
