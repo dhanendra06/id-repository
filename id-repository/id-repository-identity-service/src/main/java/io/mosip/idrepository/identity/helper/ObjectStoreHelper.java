@@ -3,13 +3,11 @@ package io.mosip.idrepository.identity.helper;
 import static io.mosip.idrepository.core.constant.IdRepoConstants.*;
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.*;
 
-import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.io.input.BoundedInputStream;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
@@ -139,18 +137,19 @@ public class ObjectStoreHelper {
 		if (rawStream == null) {
 			throw new IdRepoAppException(FILE_NOT_FOUND);
 		}
-		// BoundedInputStream limits read to maxObjectSizeBytes+1 so we can detect oversized objects
-		// without reading the entire stream, preventing unbounded heap allocation.
-		try (InputStream s3Stream = new BoundedInputStream(new BufferedInputStream(rawStream), maxObjectSizeBytes + 1)) {
+		// Read the S3 stream fully so the HTTP connection is cleanly returned to the pool.
+		// BoundedInputStream must NOT be used here — stopping mid-stream causes S3ObjectInputStream
+		// to abort the underlying HTTP connection instead of returning it, degrading the pool.
+		try (InputStream s3Stream = rawStream) {
 			byte[] encryptedData = IOUtils.toByteArray(s3Stream);
 			if (encryptedData.length > maxObjectSizeBytes) {
 				throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
 						"Object size exceeds allowed limit (" + maxObjectSizeBytes + " bytes): " + objectName);
 			}
 			byte[] decryptedData = securityManager.decrypt(encryptedData, refId);
-			encryptedData = null; // release encrypted copy; decryptedData is the only live reference now
+			encryptedData = null;
 			return decryptedData;
-		} catch (IOException | ObjectStoreAdapterException e) {
+		} catch (IOException | ObjectStoreAdapterException | IllegalStateException e) {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
 					"Failed to retrieve object: " + e.getMessage(), e);
 		}
