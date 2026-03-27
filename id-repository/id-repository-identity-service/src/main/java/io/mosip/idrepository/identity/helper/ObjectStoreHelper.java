@@ -94,10 +94,11 @@ public class ObjectStoreHelper {
 	}
 
 	public void deleteBiometricObject(String uinHash, String fileRefId)  {
-		if (this.biometricObjectExists(uinHash, fileRefId)) {
-			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
-			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
-		}
+		// S3/MinIO delete is idempotent: deleting a non-existent key returns 204 (no error).
+		// The prior existence check was an unnecessary extra S3 round-trip that contributed
+		// to connection pool exhaustion under parallel load.
+		String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
+		objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
 	}
 
 	private boolean exists(String uinHash, boolean isBio, String fileRefId)  {
