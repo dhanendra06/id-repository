@@ -235,6 +235,11 @@ public class IdRepoDraftServiceImplTest {
 		ReflectionTestUtils.setField(idRepoServiceImpl, "uinDocumentRepo", uinDocumentRepo);
 		ReflectionTestUtils.setField(idRepoServiceImpl, "bioAttributes",
 				Lists.newArrayList("individualBiometrics", "parentOrGuardianBiometrics"));
+		// Provide a synchronous inline executor so extractBiometricsDraft's
+		// CompletableFuture.runAsync tasks execute on the calling thread.
+		// This keeps unit tests deterministic without spawning real thread pools.
+		ReflectionTestUtils.setField(idRepoServiceImpl, "taskExecutor",
+				(java.util.concurrent.Executor) Runnable::run);
 		RestRequestDTO restReq = new RestRequestDTO();
 		restReq.setUri("");
 		when(restBuilder.buildRequest(Mockito.any(), Mockito.any(), Mockito.any())).thenReturn(restReq);

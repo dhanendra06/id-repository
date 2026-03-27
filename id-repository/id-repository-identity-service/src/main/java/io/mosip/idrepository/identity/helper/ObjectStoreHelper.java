@@ -82,10 +82,14 @@ public class ObjectStoreHelper {
 		return getObject(uinHash, false, fileRefId, demoDataRefId);
 	}
 
+	/**
+	 * R14: removed the upfront biometricObjectExists() existence check.
+	 * The private getObject() already handles a null stream by throwing
+	 * FILE_NOT_FOUND, so the pre-check was a redundant object-store round-trip
+	 * (one extra network call) on every read — especially costly in extractBiometrics
+	 * which reads each CBEFF file multiple times per request.
+	 */
 	public byte[] getBiometricObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		if (!this.biometricObjectExists(uinHash, fileRefId)) {
-			throw new IdRepoAppException(FILE_NOT_FOUND);
-		}
 		return getObject(uinHash, true, fileRefId, bioDataRefId);
 	}
 

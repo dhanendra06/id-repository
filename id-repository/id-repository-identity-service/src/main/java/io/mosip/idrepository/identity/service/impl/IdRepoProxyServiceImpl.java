@@ -464,6 +464,68 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 		}
 	}
 
+	/**
+	 * R12: store-only variant of getBiometricsForRequestedFormats.
+	 *
+	 * Runs the same per-modality async extraction pipeline (which caches each
+	 * extracted format to the object store as a side-effect) but deliberately
+	 * omits the final {@code cbeffUtil.createXML(finalBirs)} call that
+	 * getBiometricsForRequestedFormats() performs. When this is called from
+	 * extractBiometricsDraft the combined XML return value is never used, so
+	 * building it is pure waste (CPU + heap allocation).
+	 *
+	 * @param uinHash          the UIN hash used as the object-store bucket key
+	 * @param fileName         the biometric file name (CBEFF)
+	 * @param extractionFormats map of modality-format query params to format values
+	 * @param originalData     raw CBEFF bytes to extract templates from
+	 * @throws IdRepoAppException on extraction or object-store failure
+	 */
+	protected void extractAndStoreBiometricsForFormats(String uinHash, String fileName,
+			Map<String, String> extractionFormats, byte[] originalData) throws IdRepoAppException {
+		try {
+			List<BIR> originalBirs = cbeffUtil.getBIRDataFromXML(originalData);
+			List<CompletableFuture<List<BIR>>> extractionFutures = new ArrayList<>();
+
+			for (BiometricType modality : SUPPORTED_MODALITIES) {
+				List<BIR> birTypesForModality = originalBirs.stream()
+						.filter(bir -> {
+							List<BiometricType> types = bir.getBdbInfo().getType();
+							return !types.isEmpty() && types.get(0).value().equalsIgnoreCase(modality.value());
+						})
+						.filter(bir -> {
+							Map<String, String> others = bir.getOthers();
+							return others == null || "false".equalsIgnoreCase(others.get("EXCEPTION"));
+						})
+						.collect(Collectors.toList());
+				Optional<Entry<String, String>> extractionFormatForModality = extractionFormats.entrySet().stream()
+						.filter(ent -> ent.getKey().toLowerCase().contains(modality.value().toLowerCase())).findAny();
+
+				if (!extractionFormatForModality.isEmpty() && !birTypesForModality.isEmpty()) {
+					Entry<String, String> format = extractionFormatForModality.get();
+					extractionFutures.add(biometricExtractionService.extractTemplate(
+							uinHash, fileName, format.getKey(), format.getValue(), birTypesForModality));
+				}
+			}
+
+			originalBirs.clear(); // release parsed BIR list before blocking
+			CompletableFuture.allOf(extractionFutures.toArray(new CompletableFuture<?>[0])).join();
+			// No createXML here — side-effect (caching to object store) is the only goal
+		} catch (IdRepoAppUncheckedException e) {
+			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL,
+					"extractAndStoreBiometricsForFormats", e.getMessage());
+			throw new IdRepoAppException(e.getErrorCode(), e.getErrorText(), e);
+		} catch (InterruptedException e) {
+			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL,
+					"extractAndStoreBiometricsForFormats", e.getMessage());
+			Thread.currentThread().interrupt();
+			throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
+		} catch (Exception e) {
+			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL,
+					"extractAndStoreBiometricsForFormats", e.getMessage());
+			throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
+		}
+	}
+
 	/*
 	 * (non-Javadoc)
 	 *

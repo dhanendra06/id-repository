@@ -33,13 +33,15 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.ListIterator;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -55,6 +57,7 @@ import org.skyscreamer.jsonassert.JSONCompare;
 import org.skyscreamer.jsonassert.JSONCompareMode;
 import org.skyscreamer.jsonassert.JSONCompareResult;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.dao.DataAccessException;
@@ -147,6 +150,15 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 
 	@Autowired
 	private Environment environment;
+
+	/**
+	 * Executor that propagates the Spring Security context into async threads.
+	 * Defined in IdRepoConfig as the "withSecurityContext" bean — used by R13
+	 * to parallelise per-biometric-file extraction while keeping auth context.
+	 */
+	@Autowired
+	@Qualifier("withSecurityContext")
+	private Executor taskExecutor;
 	
 	@Value("${mosip.idrepo.create-identity.enable-force-merge:false}")
 	private boolean isForceMergeEnabled;
@@ -278,7 +290,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 			if (comparisonResult.failed()) {
 				super.updateJsonObject(draftToUpdate.getUinHash(), inputData, dbData, comparisonResult, false);
 			}
-			draftToUpdate.setUinData(convertToBytes(convertToObject(dbData.jsonString().getBytes(), Map.class)));
+			// R5: write the updated JSON directly as UTF-8 bytes — avoids a redundant
+		// Map parse + re-serialize that convertToBytes(convertToObject(...)) performed.
+		draftToUpdate.setUinData(dbData.jsonString().getBytes(StandardCharsets.UTF_8));
 			draftToUpdate.setUinDataHash(securityManager.hash(draftToUpdate.getUinData()));
 			draftToUpdate.setUpdatedBy(IdRepoSecurityManager.getUser());
 			draftToUpdate.setUpdatedDateTime(DateUtils2.getUTCCurrentDateTime());
@@ -294,14 +308,24 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		}
 	}
 
+	/**
+	 * R4: O(n) replacement for the former O(n²) implementation.
+	 * Build O(1) lookup maps from the existing draft entries, then do a single
+	 * pass over uinObject biometrics/documents — matched entries are updated
+	 * in-place; unmatched ones are collected and appended as new draft entries.
+	 */
 	private void updateBiometricAndDocumentDrafts(String regId, UinDraft draftToUpdate, Uin uinObject) {
-		List<UinBiometric> uinBiometrics = new ArrayList<>(uinObject.getBiometrics());
-		IntStream.range(0, uinBiometrics.size()).forEach(index -> {
-			UinBiometric uinBio = uinBiometrics.get(index);
-			Optional<UinBiometricDraft> draftBioRecord = draftToUpdate.getBiometrics().stream()
-					.filter(draftBio -> uinBio.getBiometricFileType().contentEquals(draftBio.getBiometricFileType())).findFirst();
-			if (draftBioRecord.isPresent()) {
-				UinBiometricDraft draftBio = draftBioRecord.get();
+		// Index existing draft biometrics and documents by their natural key for O(1) access
+		Map<String, UinBiometricDraft> draftBiosByType = draftToUpdate.getBiometrics().stream()
+				.collect(Collectors.toMap(UinBiometricDraft::getBiometricFileType, Function.identity()));
+		Map<String, UinDocumentDraft> draftDocsByCode = draftToUpdate.getDocuments().stream()
+				.collect(Collectors.toMap(UinDocumentDraft::getDoccatCode, Function.identity()));
+
+		// Biometrics: update existing draft entry when the file changed; collect truly new ones
+		List<UinBiometric> newBiometrics = new ArrayList<>();
+		for (UinBiometric uinBio : uinObject.getBiometrics()) {
+			UinBiometricDraft draftBio = draftBiosByType.get(uinBio.getBiometricFileType());
+			if (draftBio != null) {
 				if (!uinBio.getBioFileId().contentEquals(draftBio.getBioFileId())) {
 					draftBio.setRegId(regId);
 					draftBio.setBioFileId(uinBio.getBioFileId());
@@ -310,21 +334,16 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 					draftBio.setUpdatedBy(IdRepoSecurityManager.getUser());
 					draftBio.setUpdatedDateTime(DateUtils2.getUTCCurrentDateTime());
 				}
-				ListIterator<UinBiometric> listIterator = uinObject.getBiometrics().listIterator();
-				while (listIterator.hasNext()) {
-					if (listIterator.next().getBioFileId().contentEquals(draftBio.getBioFileId()))
-						listIterator.remove();
-				}
+			} else {
+				newBiometrics.add(uinBio);
 			}
-		});
+		}
 
-		List<UinDocument> uinDocuments = new ArrayList<>(uinObject.getDocuments());
-		IntStream.range(0, uinDocuments.size()).forEach(index -> {
-			UinDocument uinDoc = uinDocuments.get(index);
-			Optional<UinDocumentDraft> draftDocRecord = draftToUpdate.getDocuments().stream()
-					.filter(draftDoc -> uinDoc.getDoccatCode().contentEquals(draftDoc.getDoccatCode())).findFirst();
-			if (draftDocRecord.isPresent()) {
-				UinDocumentDraft draftDoc = draftDocRecord.get();
+		// Documents: update existing draft entry when the document changed; collect truly new ones
+		List<UinDocument> newDocuments = new ArrayList<>();
+		for (UinDocument uinDoc : uinObject.getDocuments()) {
+			UinDocumentDraft draftDoc = draftDocsByCode.get(uinDoc.getDoccatCode());
+			if (draftDoc != null) {
 				if (!uinDoc.getDocId().contentEquals(draftDoc.getDocId())) {
 					draftDoc.setRegId(regId);
 					draftDoc.setDocId(uinDoc.getDocId());
@@ -335,20 +354,16 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 					draftDoc.setUpdatedBy(IdRepoSecurityManager.getUser());
 					draftDoc.setUpdatedDateTime(uinDoc.getUpdatedDateTime());
 				}
-				ListIterator<UinDocument> listIterator = uinObject.getDocuments().listIterator();
-				while (listIterator.hasNext()) {
-					if (listIterator.next().getDocId().contentEquals(draftDoc.getDocId()))
-						listIterator.remove();
-				}
+			} else {
+				newDocuments.add(uinDoc);
 			}
-		});
+		}
 
-		List<UinBiometricDraft> bioDraftList = mapper.convertValue(uinObject.getBiometrics(),
-				new TypeReference<List<UinBiometricDraft>>() {
-				});
-		List<UinDocumentDraft> docDraftList = mapper.convertValue(uinObject.getDocuments(),
-				new TypeReference<List<UinDocumentDraft>>() {
-				});
+		// Append any brand-new biometrics/documents (not previously in the draft)
+		List<UinBiometricDraft> bioDraftList = mapper.convertValue(newBiometrics,
+				new TypeReference<List<UinBiometricDraft>>() {});
+		List<UinDocumentDraft> docDraftList = mapper.convertValue(newDocuments,
+				new TypeReference<List<UinDocumentDraft>>() {});
 		draftToUpdate.getBiometrics().addAll(bioDraftList);
 		draftToUpdate.getDocuments().addAll(docDraftList);
 		draftToUpdate.getBiometrics().forEach(bio -> bio.setRegId(regId));
@@ -386,7 +401,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 				}
 				anonymousProfileHelper.buildAndsaveProfile(true);
 				publishDocuments(draft, uinObject);
-				this.discardDraft(regId);
+				// R8: draft existence confirmed above — skip the redundant findByRegId
+				// that discardDraft() performs internally before deleting.
+				uinDraftRepo.deleteByRegId(regId);
 				return constructIdResponse(null, uinObject.getStatusCode(), null, draftVid);
 			}
 		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
@@ -424,20 +441,45 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		DataValidationUtil.validate(errors);
 	}
 
+	/**
+	 * R9: replace reflective mapper.convertValue with explicit all-args constructors.
+	 * Each biometric/document is mapped field-by-field — no Jackson reflection overhead.
+	 */
 	private void publishDocuments(UinDraft draft, final Uin uinObject) {
-		List<UinBiometric> uinBiometricList = draft.getBiometrics().stream().map(bio -> {
-			UinBiometric uinBio = mapper.convertValue(bio, UinBiometric.class);
-			uinBio.setUinRefId(uinObject.getUinRefId());
-			uinBio.setLangCode("");
-			return uinBio;
-		}).collect(Collectors.toList());
+		String uinRefId = uinObject.getUinRefId();
+		List<UinBiometric> uinBiometricList = draft.getBiometrics().stream()
+				.map(bio -> new UinBiometric(
+						uinRefId,
+						bio.getBioFileId(),
+						bio.getBiometricFileType(),
+						bio.getBiometricFileName(),
+						bio.getBiometricFileHash(),
+						"",
+						bio.getCreatedBy(),
+						bio.getCreatedDateTime(),
+						bio.getUpdatedBy(),
+						bio.getUpdatedDateTime(),
+						bio.getIsDeleted(),
+						bio.getDeletedDateTime()))
+				.collect(Collectors.toList());
 		uinBiometricRepo.saveAll(uinBiometricList);
-		List<UinDocument> uinDocumentList = draft.getDocuments().stream().map(doc -> {
-			UinDocument uinDoc = mapper.convertValue(doc, UinDocument.class);
-			uinDoc.setUinRefId(uinObject.getUinRefId());
-			uinDoc.setLangCode("");
-			return uinDoc;
-		}).collect(Collectors.toList());
+		List<UinDocument> uinDocumentList = draft.getDocuments().stream()
+				.map(doc -> new UinDocument(
+						uinRefId,
+						doc.getDoccatCode(),
+						doc.getDoctypCode(),
+						doc.getDocId(),
+						doc.getDocName(),
+						doc.getDocfmtCode(),
+						doc.getDocHash(),
+						"",
+						doc.getCreatedBy(),
+						doc.getCreatedDateTime(),
+						doc.getUpdatedBy(),
+						doc.getUpdatedDateTime(),
+						doc.getIsDeleted(),
+						doc.getDeletedDateTime()))
+				.collect(Collectors.toList());
 		uinDocumentRepo.saveAll(uinDocumentList);
 	}
 
@@ -530,18 +572,63 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		return constructIdResponse(null, DRAFTED, null, null);
 	}
 
+	/**
+	 * R12: calls extractAndStoreBiometrics instead of extractAndGetCombinedCbeff so
+	 * that the unnecessary cbeffUtil.createXML() at the end of
+	 * getBiometricsForRequestedFormats() is never executed — its return value was
+	 * already being silently discarded here.
+	 *
+	 * R13: biometric files (finger/iris/face CBEFFs) are independent; process them
+	 * in parallel via the withSecurityContext executor so their delete + extract
+	 * steps overlap instead of running sequentially.
+	 */
 	private void extractBiometricsDraft(Map<String, String> extractionFormats, UinDraft draft)
 			throws IdRepoAppException {
 		try {
 			String uinHash = draft.getUinHash().split("_")[1];
-			for (UinBiometricDraft bioDraft : draft.getBiometrics()) {
-				deleteExistingExtractedBioData(extractionFormats, uinHash, bioDraft);
-				extractAndGetCombinedCbeff(uinHash, bioDraft.getBioFileId(), extractionFormats);
+			List<UinBiometricDraft> biometrics = draft.getBiometrics();
+			if (biometrics.isEmpty()) {
+				return;
 			}
+			// Submit one task per biometric file — each bioFileId is fully independent
+			List<CompletableFuture<Void>> futures = biometrics.stream()
+					.map(bioDraft -> CompletableFuture.runAsync(() -> {
+						try {
+							deleteExistingExtractedBioData(extractionFormats, uinHash, bioDraft);
+							extractAndStoreBiometrics(uinHash, bioDraft.getBioFileId(), extractionFormats);
+						} catch (IdRepoAppException e) {
+							// Wrap checked exception so CompletableFuture can carry it
+							throw new IdRepoAppUncheckedException(e.getErrorCode(), e.getErrorText(), e);
+						}
+					}, taskExecutor))
+					.collect(Collectors.toList());
+			try {
+				CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0])).join();
+			} catch (CompletionException ce) {
+				Throwable cause = ce.getCause();
+				if (cause instanceof IdRepoAppUncheckedException) {
+					IdRepoAppUncheckedException ex = (IdRepoAppUncheckedException) cause;
+					throw new IdRepoAppException(ex.getErrorCode(), ex.getErrorText(), ex);
+				}
+				throw new IdRepoAppException(BIO_EXTRACTION_ERROR, ce);
+			}
+		} catch (IdRepoAppException e) {
+			throw e;
 		} catch (Exception e) {
 			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, GET_DRAFT, e.getMessage());
 			throw new IdRepoAppException(BIO_EXTRACTION_ERROR, e);
 		}
+	}
+
+	/**
+	 * R12: helper that triggers extraction and caching to the object store without
+	 * creating the combined CBEFF XML (via proxyService.extractAndStoreBiometricsForFormats).
+	 * Used by extractBiometricsDraft where the combined result is not needed.
+	 */
+	private void extractAndStoreBiometrics(String uinHash, String bioFileId,
+			Map<String, String> extractionFormats) throws IdRepoAppException {
+		proxyService.extractAndStoreBiometricsForFormats(uinHash, bioFileId, extractionFormats,
+				super.objectStoreHelper.getBiometricObject(uinHash, bioFileId));
 	}
 
 	private void deleteExistingExtractedBioData(Map<String, String> extractionFormats, String uinHash, UinBiometricDraft bioDraft) {
@@ -611,8 +698,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 		String resultString = new String(uinData, StandardCharsets.UTF_8);
 		String excludedAttributeListProperty = environment.getProperty(EXCLUDED_ATTRIBUTE_LIST, DEFAULT_ATTRIBUTE_LIST);
 		List<String> excludedListPropertyList = List.of(excludedAttributeListProperty.split(COMMA));
-		ObjectMapper objectMapper = new ObjectMapper();
-		JsonNode jsonNode = objectMapper.readTree(resultString);
+		// Cross-cutting fix: reuse the injected ObjectMapper singleton instead of
+		// constructing a new (expensive) instance on every call.
+		JsonNode jsonNode = mapper.readTree(resultString);
 		jsonNode.fieldNames().forEachRemaining(key -> {
 			if(!excludedListPropertyList.contains(key)){
 				attributeList.add(key);
