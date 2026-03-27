@@ -83,8 +83,16 @@ public class ObjectStoreHelper {
 	}
 
 	public byte[] getBiometricObject(String uinHash, String fileRefId) throws IdRepoAppException {
-		// No existence pre-check: getObject() throws FILE_NOT_FOUND if the stream is null,
-		// avoiding a redundant HEAD round-trip to the object store (O3).
+		boolean exists;
+		try {
+			exists = this.biometricObjectExists(uinHash, fileRefId);
+		} catch (ObjectStoreAdapterException | IllegalStateException e) {
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Failed to check object existence: " + e.getMessage(), e);
+		}
+		if (!exists) {
+			throw new IdRepoAppException(FILE_NOT_FOUND);
+		}
 		return getObject(uinHash, true, fileRefId, bioDataRefId);
 	}
 
@@ -111,7 +119,7 @@ public class ObjectStoreHelper {
 		try (InputStream encryptData = new ByteArrayInputStream(securityManager.encrypt(data, refId))) {
 			objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName, encryptData);
 			mosipLogger.debug("Uploaded object: {} ({} bytes)", objectName, data.length);
-		} catch (IOException | ObjectStoreAdapterException e) {
+		} catch (IOException | ObjectStoreAdapterException | IllegalStateException e) {
 			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
 					"Failed to store object: " + e.getMessage(), e);
 		}
@@ -121,7 +129,13 @@ public class ObjectStoreHelper {
 	private byte[] getObject(String uinHash, boolean isBio, String fileRefId, String refId)
 			throws IdRepoAppException {
 		String objectName = uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
-		InputStream rawStream = objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		InputStream rawStream;
+		try {
+			rawStream = objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		} catch (ObjectStoreAdapterException | IllegalStateException e) {
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Failed to retrieve object: " + e.getMessage(), e);
+		}
 		if (rawStream == null) {
 			throw new IdRepoAppException(FILE_NOT_FOUND);
 		}

@@ -14,7 +14,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-import io.mosip.commons.khazana.exception.ObjectStoreAdapterException;
 import io.mosip.idrepository.core.dto.BioExtractRequestDTO;
 import io.mosip.idrepository.core.dto.BioExtractResponseDTO;
 import io.mosip.idrepository.core.exception.BiometricExtractionException;
@@ -86,9 +85,6 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 					throw e; // unexpected error — propagate
 				}
 				// FILE_NOT_FOUND = cache miss; fall through to extract
-			} catch (ObjectStoreAdapterException e) {
-				mosipLogger.error(IdRepoSecurityManager.getUser(), this.getClass().getSimpleName(), EXTRACT_TEMPLATE,
-						e.getMessage());
 			}
 
 			mosipLogger.info(IdRepoSecurityManager.getUser(), this.getClass().getSimpleName(), EXTRACT_TEMPLATE,

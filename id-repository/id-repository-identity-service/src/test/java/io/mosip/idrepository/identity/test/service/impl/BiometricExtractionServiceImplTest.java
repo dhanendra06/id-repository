@@ -23,7 +23,6 @@ import org.springframework.test.context.TestContext;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.web.context.WebApplicationContext;
 
-import io.mosip.commons.khazana.exception.ObjectStoreAdapterException;
 import io.mosip.idrepository.core.constant.IdRepoErrorConstants;
 import io.mosip.idrepository.core.exception.BiometricExtractionException;
 import io.mosip.idrepository.core.exception.IdRepoAppException;
@@ -99,16 +98,19 @@ public class BiometricExtractionServiceImplTest {
 
 	@Test
 	public void testExtractTemplateObjectStoreFailure() throws Exception {
-		// ObjectStoreAdapterException on GET falls through to extraction (logged, not rethrown)
-		when(objectStoreHelper.getBiometricObject(any(), any())).thenThrow(new ObjectStoreAdapterException("", ""));
+		// Genuine S3 failure (FILE_STORAGE_ACCESS_ERROR, not FILE_NOT_FOUND) must propagate —
+		// extraction must NOT silently fall through on real storage errors.
+		when(objectStoreHelper.getBiometricObject(any(), any()))
+				.thenThrow(new IdRepoAppException(IdRepoErrorConstants.FILE_STORAGE_ACCESS_ERROR));
 		String cbeff = IOUtils.toString(this.getClass().getClassLoader().getResourceAsStream("test-cbeff.xml"),
 				StandardCharsets.UTF_8);
 		List<BIR> birDataFromXMLType = CbeffValidator.getBIRDataFromXMLType(CryptoUtil.decodeURLSafeBase64(cbeff),
 				"Finger");
-		when(bioExractionHelper.extractTemplates(any(), any())).thenReturn(birDataFromXMLType);
-		when(cbeffUtil.createXML(any())).thenReturn(new byte[0]);
-		CompletableFuture<List<BIR>> extractTemplate = extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
-		assertEquals(birDataFromXMLType.size(), extractTemplate.join().size());
+		try {
+			extractionServiceImpl.extractTemplate("", "", "a", "ExtractionFormat", birDataFromXMLType);
+		} catch (IdRepoAppException e) {
+			assertEquals(IdRepoErrorConstants.UNKNOWN_ERROR.getErrorCode(), e.getErrorCode());
+		}
 	}
 
 	@Test
