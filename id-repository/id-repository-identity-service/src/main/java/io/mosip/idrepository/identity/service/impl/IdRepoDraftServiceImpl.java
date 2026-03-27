@@ -37,9 +37,6 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.Executor;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -57,7 +54,6 @@ import org.skyscreamer.jsonassert.JSONCompare;
 import org.skyscreamer.jsonassert.JSONCompareMode;
 import org.skyscreamer.jsonassert.JSONCompareResult;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.dao.DataAccessException;
@@ -151,15 +147,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	@Autowired
 	private Environment environment;
 
-	/**
-	 * Executor that propagates the Spring Security context into async threads.
-	 * Defined in IdRepoConfig as the "withSecurityContext" bean — used by R13
-	 * to parallelise per-biometric-file extraction while keeping auth context.
-	 */
-	@Autowired
-	@Qualifier("withSecurityContext")
-	private Executor taskExecutor;
-	
 	@Value("${mosip.idrepo.create-identity.enable-force-merge:false}")
 	private boolean isForceMergeEnabled;
 	
@@ -590,27 +577,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 			if (biometrics.isEmpty()) {
 				return;
 			}
-			// Submit one task per biometric file — each bioFileId is fully independent
-			List<CompletableFuture<Void>> futures = biometrics.stream()
-					.map(bioDraft -> CompletableFuture.runAsync(() -> {
-						try {
-							deleteExistingExtractedBioData(extractionFormats, uinHash, bioDraft);
-							extractAndStoreBiometrics(uinHash, bioDraft.getBioFileId(), extractionFormats);
-						} catch (IdRepoAppException e) {
-							// Wrap checked exception so CompletableFuture can carry it
-							throw new IdRepoAppUncheckedException(e.getErrorCode(), e.getErrorText(), e);
-						}
-					}, taskExecutor))
-					.collect(Collectors.toList());
-			try {
-				CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0])).join();
-			} catch (CompletionException ce) {
-				Throwable cause = ce.getCause();
-				if (cause instanceof IdRepoAppUncheckedException) {
-					IdRepoAppUncheckedException ex = (IdRepoAppUncheckedException) cause;
-					throw new IdRepoAppException(ex.getErrorCode(), ex.getErrorText(), ex);
-				}
-				throw new IdRepoAppException(BIO_EXTRACTION_ERROR, ce);
+			for (UinBiometricDraft bioDraft : biometrics) {
+				deleteExistingExtractedBioData(extractionFormats, uinHash, bioDraft);
+				extractAndStoreBiometrics(uinHash, bioDraft.getBioFileId(), extractionFormats);
 			}
 		} catch (IdRepoAppException e) {
 			throw e;
