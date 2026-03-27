@@ -394,7 +394,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 			String draftVid = isNewIdentity ? vidDraftHelper.generateDraftVid(uin) : null;
 
 			// Execute all DB writes in a short-lived transaction via the Spring proxy.
-			Uin uinObject = selfProxy.doPublishDraft(regId, draft, uin, isNewIdentity);
+			// draft is NOT passed — it is a detached entity loaded outside a transaction;
+			// passing it would cause LazyInitializationException on getBiometrics()/getDocuments().
+			Uin uinObject = selfProxy.doPublishDraft(regId, uin, isNewIdentity);
 
 			// Activate VID after the transaction has committed.
 			if (draftVid != null) {
@@ -413,7 +415,11 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl implements IdRepoD
 	 * interceptor applies @Transactional (self-invocation does not go through the proxy).
 	 */
 	@Transactional(rollbackFor = { IdRepoAppException.class, IdRepoAppUncheckedException.class })
-	public Uin doPublishDraft(String regId, UinDraft draft, String uin, boolean isNewIdentity) throws IdRepoAppException {
+	public Uin doPublishDraft(String regId, String uin, boolean isNewIdentity) throws IdRepoAppException {
+		// Reload draft inside the transaction so lazy collections (getBiometrics, getDocuments)
+		// are accessible via an open Hibernate session.
+		UinDraft draft = uinDraftRepo.findByRegId(regId)
+				.orElseThrow(() -> new IdRepoAppException(NO_RECORD_FOUND));
 		anonymousProfileHelper
 				.setNewCbeff(draft.getUinHash().split("_")[1],
 						!anonymousProfileHelper.isNewCbeffPresent() && Objects.nonNull(draft.getBiometrics())
