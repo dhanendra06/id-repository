@@ -88,7 +88,7 @@ public class AuditHelper {
 	/**
 	 * Audit - asynchronously calls audit service (fire-and-forget).
 	 */
-	public void auditAsynch(AuditModules module, AuditEvents event, String id, IdType idType, String desc) {
+	public void auditAsync(AuditModules module, AuditEvents event, String id, IdType idType, String desc) {
 		String requestId = (id != null) ? securityManager.hash(id.getBytes()) : null;
 
 		RequestWrapper<AuditRequestDTO> auditRequest = auditBuilder.buildRequest(
@@ -133,7 +133,7 @@ public class AuditHelper {
 	public void auditError(AuditModules module, AuditEvents event, String id, IdType idType, Throwable e) {
 		try {
 			//this.audit(module, event, id, idType, mapper.writeValueAsString(IdRepoExceptionHandler.getAllErrors(e)));
-			this.auditAsynch(module, event, id, idType, mapper.writeValueAsString(IdRepoExceptionHandler.getAllErrors(e)));
+			this.auditAsync(module, event, id, idType, mapper.writeValueAsString(IdRepoExceptionHandler.getAllErrors(e)));
 		} catch (JsonProcessingException ex) {
 			mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditRequestBuilder", "auditError",
 					"Exception : " + ExceptionUtils.getStackTrace(ex));

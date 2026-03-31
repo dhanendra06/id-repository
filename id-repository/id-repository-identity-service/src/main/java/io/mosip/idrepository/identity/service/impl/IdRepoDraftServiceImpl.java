@@ -163,10 +163,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 	private static final String COMMA = ",";
 	private static final String DEFAULT_ATTRIBUTE_LIST = "UIN,verifiedAttributes,IDSchemaVersion";
 
-	// ------------------------------------------------------------------ //
-	//  Injected configuration                                              //
-	// ------------------------------------------------------------------ //
-
 	@Value("${" + MOSIP_KERNEL_IDREPO_JSON_PATH + "}")
 	private String uinPath;
 
@@ -175,10 +171,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 
 	@Value("${mosip.idrepo.create-identity.enable-force-merge:false}")
 	private boolean isForceMergeEnabled;
-
-	// ------------------------------------------------------------------ //
-	//  Injected dependencies                                               //
-	// ------------------------------------------------------------------ //
 
 	@Autowired
 	private UinDraftRepo uinDraftRepo;
@@ -206,10 +198,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 
 	@Autowired
 	private Environment environment;
-
-	// ================================================================== //
-	//  Public API                                                          //
-	// ================================================================== //
 
 	@Override
 	public IdResponseDTO createDraft(String registrationId, String uin) throws IdRepoAppException {
@@ -499,10 +487,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 		return draftResponseDto;
 	}
 
-	// ================================================================== //
-	//  Private — draft construction                                        //
-	// ================================================================== //
-
 	/**
 	 * Wraps a UIN value in the nested identity object structure expected by the
 	 * schema (e.g. {@code {"identity": {"UIN": "..."}}} ).
@@ -536,10 +520,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 			throw new IdRepoAppException(UIN_GENERATION_FAILED, e);
 		}
 	}
-
-	// ================================================================== //
-	//  Private — update helpers                                            //
-	// ================================================================== //
 
 	private void updateDemographicData(IdRequestDTO request, UinDraft draftToUpdate)
 			throws JSONException, IdRepoAppException, IOException {
@@ -664,10 +644,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 		draftToUpdate.getDocuments().forEach(d -> d.setRegId(regId));
 	}
 
-	// ================================================================== //
-	//  Private — publish helpers                                           //
-	// ================================================================== //
-
 	/**
 	 * Builds an {@link IdRequestDTO} from the stored draft data.
 	 *
@@ -740,11 +716,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 		}
 		return uin;
 	}
-
-	// ================================================================== //
-	//  Private — biometric extraction helpers                             //
-	// ================================================================== //
-
 	/**
 	 * Extracts biometrics for all modalities in the draft.
 	 *
@@ -819,10 +790,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 	private String getModalityForFormat(String formatQueryParam) {
 		return formatQueryParam.replace(EXTRACTION_FORMAT_QUERY_PARAM_SUFFIX, "");
 	}
-
-	// ================================================================== //
-	//  Private — response construction                                    //
-	// ================================================================== //
 
 	/**
 	 * Builds the {@link IdResponseDTO} returned to callers.

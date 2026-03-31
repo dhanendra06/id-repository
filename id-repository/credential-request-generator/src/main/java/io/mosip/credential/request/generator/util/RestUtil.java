@@ -4,23 +4,16 @@ import io.mosip.credential.request.generator.constants.ApiName;
 import io.mosip.idrepository.core.util.EnvUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.env.Environment;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -35,8 +28,8 @@ public class RestUtil {
 	private EnvUtil environment;
 
 	@Autowired
-	@Qualifier("selfTokenRestTemplate")
-	private RestTemplate restTemplate;
+	@Qualifier("selfTokenWebClient")
+	private WebClient webClient;
 
 	/**
 	 * Post api.
@@ -50,7 +43,7 @@ public class RestUtil {
 	 * @param requestType     the request type
 	 * @param responseClass   the response class
 	 * @return the t
-	 * @throws Exception 
+	 * @throws Exception
 	 */
 	@SuppressWarnings("unchecked")
 	public <T> T postApi(ApiName apiName, List<String> pathsegments, String queryParamName, String queryParamValue,
@@ -79,9 +72,20 @@ public class RestUtil {
 				}
 			}
 			try {
-				result = (T) restTemplate.postForObject(
-						builder.toUriString(), setRequestHeader(requestType, mediaType), responseClass
-				);
+				HttpHeaders headers = buildHeaders(requestType, mediaType);
+				Object body = extractBody(requestType);
+				WebClient.RequestHeadersSpec<?> headersSpec;
+				if (body != null) {
+					headersSpec = webClient.post()
+							.uri(builder.toUriString())
+							.headers(h -> h.addAll(headers))
+							.bodyValue(body);
+				} else {
+					headersSpec = webClient.post()
+							.uri(builder.toUriString())
+							.headers(h -> h.addAll(headers));
+				}
+				result = (T) headersSpec.retrieve().bodyToMono(responseClass).block();
 			} catch (Exception e) {
 				throw new Exception(e);
 			}
@@ -99,7 +103,7 @@ public class RestUtil {
 	 * @param queryParamValue the query param value
 	 * @param responseType    the response type
 	 * @return the api
-	 * @throws Exception 
+	 * @throws Exception
 	 */
 	@SuppressWarnings("unchecked")
 	public <T> T getApi(ApiName apiName, List<String> pathsegments, String queryParamName, String queryParamValue,
@@ -132,9 +136,11 @@ public class RestUtil {
 			}
 			uriComponents = builder.build(false).encode();
 			try {
-				result = (T) restTemplate.exchange(
-						uriComponents.toUri(), HttpMethod.GET, setRequestHeader(null, null), responseType
-				).getBody();
+				result = (T) webClient.get()
+						.uri(uriComponents.toUri())
+						.retrieve()
+						.bodyToMono(responseType)
+						.block();
 			} catch (Exception e) {
 				throw new Exception(e);
 			}
@@ -142,17 +148,17 @@ public class RestUtil {
 		return result;
 	}
 
-
 	/**
-	 * Sets the request header.
+	 * Builds headers for the WebClient request.
 	 *
 	 * @param requestType the request type
 	 * @param mediaType   the media type
-	 * @return the http entity
+	 * @return the http headers
 	 * @throws IOException Signals that an I/O exception has occurred.
 	 */
-    private HttpEntity<Object> setRequestHeader(Object requestType, MediaType mediaType) throws IOException {
-        MultiValueMap<String, String> headers = new LinkedMultiValueMap<String, String>();
+	@SuppressWarnings("unchecked")
+    private HttpHeaders buildHeaders(Object requestType, MediaType mediaType) throws IOException {
+        HttpHeaders headers = new HttpHeaders();
         if (mediaType != null) {
             headers.add("Content-Type", mediaType.toString());
         }
@@ -160,18 +166,28 @@ public class RestUtil {
             try {
                 HttpEntity<Object> httpEntity = (HttpEntity<Object>) requestType;
                 HttpHeaders httpHeader = httpEntity.getHeaders();
-				for (String key : httpHeader.keySet()) {
-					if (!(headers.containsKey(CONTENT_TYPE) && key.equals(CONTENT_TYPE)))
-					{
-						headers.add(key, Objects.requireNonNull(httpHeader.get(key)).get(0));
-					}
-				}
-                return new HttpEntity<Object>(httpEntity.getBody(), headers);
+                for (String key : httpHeader.keySet()) {
+                    if (!(headers.containsKey(CONTENT_TYPE) && key.equals(CONTENT_TYPE))) {
+                        headers.add(key, Objects.requireNonNull(httpHeader.get(key)).get(0));
+                    }
+                }
             } catch (ClassCastException e) {
-                return new HttpEntity<Object>(requestType, headers);
+                // requestType is not HttpEntity, no additional headers to merge
             }
-        } else
-            return new HttpEntity<Object>(headers);
+        }
+        return headers;
+    }
+
+	@SuppressWarnings("unchecked")
+    private Object extractBody(Object requestType) {
+        if (requestType != null) {
+            try {
+                return ((HttpEntity<Object>) requestType).getBody();
+            } catch (ClassCastException e) {
+                return requestType;
+            }
+        }
+        return null;
     }
 
 }

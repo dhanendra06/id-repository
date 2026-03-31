@@ -6,11 +6,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.http.HttpResponse;
-import org.apache.http.client.HttpClient;
+
 import org.apache.http.client.methods.HttpPost;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
@@ -81,7 +79,6 @@ public class RestUtilTest {
         Mockito.when(environment.getProperty(apiName.name())).thenReturn("aa");
         RestUtil restUtilSpy = Mockito.spy(restUtil);
 
-        RestTemplate restTemplate = new RestTemplate();
         //Mockito.doReturn(restTemplate).when(restUtilSpy).getRestTemplate();
         restUtilSpy.postApi(apiName, pathsegments, queryParamName, queryParamValue, mediaType, requestType, responseClass);
     }
@@ -211,11 +208,11 @@ public class RestUtilTest {
         Mockito.when(environment.getProperty("KEYBASEDTOKENAPI")).thenReturn("1212");
         RestUtil restUtilSpy = Mockito.spy(restUtil);
         //Mockito.doReturn("1122").when(restUtilSpy).getToken();
-        ReflectionTestUtils.invokeMethod(restUtilSpy, "setRequestHeader", requestType, mediaType);
+        ReflectionTestUtils.invokeMethod(restUtilSpy, "buildHeaders", requestType, mediaType);
         //ClassCastException
-        ReflectionTestUtils.invokeMethod(restUtilSpy, "setRequestHeader", new Object(), mediaType);
+        ReflectionTestUtils.invokeMethod(restUtilSpy, "buildHeaders", new Object(), mediaType);
         //null
-        ReflectionTestUtils.invokeMethod(restUtilSpy, "setRequestHeader", null, null);
+        ReflectionTestUtils.invokeMethod(restUtilSpy, "buildHeaders", null, null);
     }
 
     /**
@@ -232,7 +229,7 @@ public class RestUtilTest {
         MediaType mediaType = MediaType.ALL;
         RestUtil restUtilSpy = Mockito.spy(restUtil);
         //Mockito.doReturn("1122").when(restUtilSpy).getToken();
-        ReflectionTestUtils.invokeMethod(restUtilSpy, "setRequestHeader", requestType, mediaType);
+        ReflectionTestUtils.invokeMethod(restUtilSpy, "buildHeaders", requestType, mediaType);
     }
 
 }

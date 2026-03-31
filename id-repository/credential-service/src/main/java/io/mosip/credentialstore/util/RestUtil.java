@@ -2,7 +2,6 @@ package io.mosip.credentialstore.util;
 
 import java.io.IOException;
 import java.net.URI;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -11,11 +10,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -29,8 +25,8 @@ public class RestUtil {
     private EnvUtil environment;
 
 	@Autowired
-	@Qualifier("selfTokenRestTemplate")
-	RestTemplate restTemplate;
+	@Qualifier("selfTokenWebClient")
+	private WebClient webClient;
 
 	@SuppressWarnings("unchecked")
 	public <T> T postApi(ApiName apiName, List<String> pathsegments, String queryParamName, String queryParamValue,
@@ -60,8 +56,20 @@ public class RestUtil {
 			}
 
         try {
-            result = (T) restTemplate.postForObject(builder.toUriString(), setRequestHeader(requestType, mediaType), responseClass);
-
+            HttpHeaders headers = buildHeaders(requestType, mediaType);
+            Object body = extractBody(requestType);
+            WebClient.RequestHeadersSpec<?> headersSpec;
+            if (body != null) {
+                headersSpec = webClient.post()
+                        .uri(builder.toUriString())
+                        .headers(h -> h.addAll(headers))
+                        .bodyValue(body);
+            } else {
+                headersSpec = webClient.post()
+                        .uri(builder.toUriString())
+                        .headers(h -> h.addAll(headers));
+            }
+            result = (T) headersSpec.retrieve().bodyToMono(responseClass).block();
         } catch (Exception e) {
              throw new Exception(e);
 			}
@@ -101,8 +109,11 @@ public class RestUtil {
 		uriComponents = builder.build(false).encode();
 		IdRepoLogger.getLogger(RestUtil.class).debug(uriComponents.toUri().toString());
         try {
-            result = (T) restTemplate.exchange(uriComponents.toUri(), HttpMethod.GET, setRequestHeader(null, null), responseType)
-                    .getBody();
+            result = (T) webClient.get()
+                    .uri(uriComponents.toUri())
+                    .retrieve()
+                    .bodyToMono(responseType)
+                    .block();
         } catch (Exception e) {
             throw new Exception(e);
         }
@@ -110,6 +121,7 @@ public class RestUtil {
 		}
 		return result;
     }
+
 	@SuppressWarnings("unchecked")
 	public <T> T getApi(ApiName apiName, Map<String, String>  pathsegments,
 			Class<?> responseType) throws Exception {
@@ -124,8 +136,11 @@ public class RestUtil {
 			 URI urlWithPath = builder.build(pathsegments);
 
         try {
-            result = (T) restTemplate.exchange(urlWithPath, HttpMethod.GET, setRequestHeader(null, null), responseType)
-                    .getBody();
+            result = (T) webClient.get()
+                    .uri(urlWithPath)
+                    .retrieve()
+                    .bodyToMono(responseType)
+                    .block();
         } catch (Exception e) {
         	throw new Exception(e);
         }
@@ -133,30 +148,6 @@ public class RestUtil {
 		}
 		return result;
     }
-    
-    private HttpEntity<Object> setRequestHeader(Object requestType, MediaType mediaType) throws IOException {
-        MultiValueMap<String, String> headers = new LinkedMultiValueMap<String, String>();
-        if (mediaType != null) {
-            headers.add("Content-Type", mediaType.toString());
-        }
-        if (requestType != null) {
-            try {
-                HttpEntity<Object> httpEntity = (HttpEntity<Object>) requestType;
-                HttpHeaders httpHeader = httpEntity.getHeaders();
-				for (String key : httpHeader.keySet()) {
-					String contentType = "Content-Type";
-					if (!(headers.containsKey(contentType) && key.equals(contentType)))
-						headers.add(key, Objects.requireNonNull(httpHeader.get(key)).get(0));
-				}
-                return new HttpEntity<Object>(httpEntity.getBody(), headers);
-            } catch (ClassCastException e) {
-                return new HttpEntity<Object>(requestType, headers);
-            }
-        } else
-            return new HttpEntity<Object>(headers);
-    }
-
-    
 
 	@SuppressWarnings("unchecked")
 	public <T> T postApi(String url, List<String> pathsegments, String queryParamName, String queryParamValue,
@@ -186,14 +177,58 @@ public class RestUtil {
 			}
 
 			try {
-				result = (T) restTemplate.postForObject(builder.toUriString(), setRequestHeader(requestType, mediaType),
-						responseClass);
-
+                HttpHeaders headers = buildHeaders(requestType, mediaType);
+                Object body = extractBody(requestType);
+                WebClient.RequestHeadersSpec<?> headersSpec;
+                if (body != null) {
+                    headersSpec = webClient.post()
+                            .uri(builder.toUriString())
+                            .headers(h -> h.addAll(headers))
+                            .bodyValue(body);
+                } else {
+                    headersSpec = webClient.post()
+                            .uri(builder.toUriString())
+                            .headers(h -> h.addAll(headers));
+                }
+                result = (T) headersSpec.retrieve().bodyToMono(responseClass).block();
 			} catch (Exception e) {
 				throw new Exception(e);
 			}
 		}
 		return result;
 	}
+
+    private HttpHeaders buildHeaders(Object requestType, MediaType mediaType) throws IOException {
+        HttpHeaders headers = new HttpHeaders();
+        if (mediaType != null) {
+            headers.add("Content-Type", mediaType.toString());
+        }
+        if (requestType != null) {
+            try {
+                HttpEntity<Object> httpEntity = (HttpEntity<Object>) requestType;
+                HttpHeaders httpHeader = httpEntity.getHeaders();
+                for (String key : httpHeader.keySet()) {
+                    String contentType = "Content-Type";
+                    if (!(headers.containsKey(contentType) && key.equals(contentType)))
+                        headers.add(key, Objects.requireNonNull(httpHeader.get(key)).get(0));
+                }
+            } catch (ClassCastException e) {
+                // requestType is not HttpEntity, no additional headers to merge
+            }
+        }
+        return headers;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object extractBody(Object requestType) {
+        if (requestType != null) {
+            try {
+                return ((HttpEntity<Object>) requestType).getBody();
+            } catch (ClassCastException e) {
+                return requestType;
+            }
+        }
+        return null;
+    }
 
 }

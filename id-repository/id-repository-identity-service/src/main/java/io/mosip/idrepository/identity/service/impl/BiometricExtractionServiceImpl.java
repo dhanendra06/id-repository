@@ -61,19 +61,11 @@ import io.mosip.kernel.core.logger.spi.Logger;
 @Service
 public class BiometricExtractionServiceImpl implements BiometricExtractionService {
 
-	// ------------------------------------------------------------------ //
-	//  Constants                                                           //
-	// ------------------------------------------------------------------ //
-
 	private static final String EXTRACT_TEMPLATE   = "extractTemplate";
 	private static final String FORMAT_FLAG_SUFFIX = ".format";
 
 	private static final Logger mosipLogger =
 			IdRepoLogger.getLogger(BiometricExtractionServiceImpl.class);
-
-	// ------------------------------------------------------------------ //
-	//  Dependencies                                                        //
-	// ------------------------------------------------------------------ //
 
 	@Autowired
 	private ObjectStoreHelper objectStoreHelper;
@@ -84,13 +76,6 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 	@Autowired
 	private CbeffUtil cbeffUtil;
 
-	// ------------------------------------------------------------------ //
-	//  Configuration                                                       //
-	// ------------------------------------------------------------------ //
-
-	// ------------------------------------------------------------------ //
-	//  Stampede guard                                                      //
-	// ------------------------------------------------------------------ //
 
 	/**
 	 * In-flight extractions keyed by {@code "<uinHash>|<extractionFileName>"}.
@@ -102,10 +87,6 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 	 */
 	private final ConcurrentHashMap<String, CompletableFuture<List<BIR>>> inFlight =
 			new ConcurrentHashMap<>();
-
-	// ------------------------------------------------------------------ //
-	//  Public API                                                          //
-	// ------------------------------------------------------------------ //
 
 	/**
 	 * Extracts or retrieves a biometric template for the given modality/format.
@@ -189,10 +170,6 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 		}
 	}
 
-	// ------------------------------------------------------------------ //
-	//  Lifecycle                                                           //
-	// ------------------------------------------------------------------ //
-
 	/**
 	 * Cancels all pending in-flight futures on bean destruction so that
 	 * downstream callers are not left waiting during a graceful shutdown.
@@ -205,10 +182,6 @@ public class BiometricExtractionServiceImpl implements BiometricExtractionServic
 		inFlight.values().forEach(f -> f.cancel(true));
 		inFlight.clear();
 	}
-
-	// ------------------------------------------------------------------ //
-	//  Private helpers                                                     //
-	// ------------------------------------------------------------------ //
 
 	/**
 	 * Constructs the object-store file name for a specific extraction result.
