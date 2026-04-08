@@ -52,12 +52,18 @@ public class CredentialStoreBeanConfig {
 	@Value("${credential.service.executor.thread-name-prefix:cred-async-}")
 	private String executorThreadNamePrefix;
 
-	// --- Caffeine Cache (IDREPO_DATA) ---
+	// --- Caffeine Cache config ---
 	@Value("${credential.cache.idrepo.expire-after-write-minutes:5}")
 	private long idrepoCacheExpireMinutes;
 
 	@Value("${credential.cache.idrepo.maximum-size:500}")
 	private long idrepoCacheMaxSize;
+
+	@Value("${credential.cache.policy.expire-after-write-minutes:60}")
+	private long policyCacheExpireMinutes;
+
+	@Value("${credential.cache.policy.maximum-size:200}")
+	private long policyCacheMaxSize;
 
 	@Bean
 	public DummyPartnerCheckUtil dummyPartnerCheckUtil() {
@@ -143,6 +149,9 @@ public class CredentialStoreBeanConfig {
 		executor.setMaxPoolSize(executorMaxPoolSize);
 		executor.setQueueCapacity(executorQueueCapacity);
 		executor.setThreadNamePrefix(executorThreadNamePrefix);
+		// When pool and queue are both full, run on the calling thread rather than
+		// dropping the task — keeps behaviour predictable under burst load.
+		executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
 		executor.initialize();
 		return executor;
 	}
@@ -151,8 +160,18 @@ public class CredentialStoreBeanConfig {
 	public CacheManager cacheManager() {
 		SimpleCacheManager cacheManager = new SimpleCacheManager();
 		cacheManager.setCaches(Arrays.asList(
-				new ConcurrentMapCache("DATASHARE_POLICIES"),
-				new ConcurrentMapCache("PARTNER_EXTRACTOR_FORMATS"),
+				// Policy caches: long-lived, bounded — use Caffeine so they don't grow unboundedly
+				new CaffeineCache("DATASHARE_POLICIES",
+						Caffeine.newBuilder()
+								.expireAfterWrite(policyCacheExpireMinutes, TimeUnit.MINUTES)
+								.maximumSize(policyCacheMaxSize)
+								.build()),
+				new CaffeineCache("PARTNER_EXTRACTOR_FORMATS",
+						Caffeine.newBuilder()
+								.expireAfterWrite(policyCacheExpireMinutes, TimeUnit.MINUTES)
+								.maximumSize(policyCacheMaxSize)
+								.build()),
+				// topics: registration state, stable — unbounded ConcurrentMapCache is fine
 				new ConcurrentMapCache("topics"),
 				new CaffeineCache("IDREPO_DATA",
 						Caffeine.newBuilder()

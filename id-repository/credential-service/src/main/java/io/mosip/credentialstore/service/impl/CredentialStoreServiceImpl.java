@@ -208,7 +208,6 @@ public class CredentialStoreServiceImpl implements CredentialStoreService {
 			// so it can run concurrently with the encryption/datashare operation below.
 			final String encodedDataForSign = encodedData;
 			final String requestIdForSign = credentialServiceRequestDto.getRequestId();
-			long t5sign = System.currentTimeMillis();
 			CompletableFuture<String> signatureFuture = CompletableFuture.supplyAsync(() -> {
 				try {
 					return digitalSignatureUtil.sign(encodedDataForSign, requestIdForSign);
@@ -217,7 +216,6 @@ public class CredentialStoreServiceImpl implements CredentialStoreService {
 				}
 			}, credentialServiceExecutor);
 
-			long t5 = System.currentTimeMillis();
 			if (policyDetailResponseDto.getPolicies() != null && policyDetailResponseDto.getPolicies().getDataSharePolicies().getTypeOfShare()
 					.equalsIgnoreCase(DATASHARE)) {
 				dataShare = dataShareUtil.getDataShare(jsonData.getBytes(), policyDetailResponseDto.getPolicyId(),
@@ -239,7 +237,6 @@ public class CredentialStoreServiceImpl implements CredentialStoreService {
 				if (cause instanceof SignatureException) throw (SignatureException) cause;
 				throw new SignatureException(cause);
 			}
-			signature = digitalSignatureUtil.sign(encodedData, credentialServiceRequestDto.getRequestId());
 			EventModel eventModel = getEventModel(dataShare, credentialServiceRequestDto,
 					jsonData, signature);
 			String topic = credentialServiceRequestDto.getIssuer() + "/" + IDAEventType.CREDENTIAL_ISSUED;
@@ -456,20 +453,23 @@ public class CredentialStoreServiceImpl implements CredentialStoreService {
 								partnerId, requestId);
 				if (partnerExtractorResponse != null) {
 				List<PartnerExtractor> partnerExtractorList = partnerExtractorResponse.getExtractors();
+				// Build a lookup map keyed by attributeName (lower-cased) to avoid O(n²) nested iteration
+				Map<String, PartnerExtractor> extractorByName = new HashMap<>();
+				partnerExtractorList.forEach(e -> extractorByName.put(e.getAttributeName().toLowerCase(), e));
+
 					sharableAttributeList.forEach(dto -> {
 						if (dto.getGroup() != null && dto.getGroup().equalsIgnoreCase(CredentialConstants.CBEFF)
-							&& dto.getFormat().equalsIgnoreCase(CredentialConstants.EXTRACTION)) {
-							partnerExtractorList.forEach(partnerExtractorDto -> {
-								if (partnerExtractorDto.getAttributeName().equalsIgnoreCase(dto.getAttributeName())) {
-									if(partnerExtractorDto.getBiometric().contains(CredentialConstants.FACE)){
-										formatterMap.put(CredentialConstants.FACE, getFormat(partnerExtractorDto));
-									} else if (partnerExtractorDto.getBiometric().contains(CredentialConstants.IRIS)) {
-										formatterMap.put(CredentialConstants.IRIS, getFormat(partnerExtractorDto));
-									} else if (partnerExtractorDto.getBiometric().contains(CredentialConstants.FINGER)) {
-										formatterMap.put(CredentialConstants.FINGER, getFormat(partnerExtractorDto));
-					               }
+								&& dto.getFormat().equalsIgnoreCase(CredentialConstants.EXTRACTION)) {
+							PartnerExtractor extractor = extractorByName.get(dto.getAttributeName().toLowerCase());
+							if (extractor != null) {
+								if (extractor.getBiometric().contains(CredentialConstants.FACE)) {
+									formatterMap.put(CredentialConstants.FACE, getFormat(extractor));
+								} else if (extractor.getBiometric().contains(CredentialConstants.IRIS)) {
+									formatterMap.put(CredentialConstants.IRIS, getFormat(extractor));
+								} else if (extractor.getBiometric().contains(CredentialConstants.FINGER)) {
+									formatterMap.put(CredentialConstants.FINGER, getFormat(extractor));
 								}
-							});
+							}
 						}
 					});
 				}

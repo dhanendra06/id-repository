@@ -155,12 +155,8 @@ public class EncryptionUtil {
 			cryptoReq.setReferenceId(partnerId);
 			cryptoReq.setPrependThumbprint(EnvUtil.getPrependThumbprintStatus());
 
-			LocalDateTime now = LocalDateTime.parse(
-					DateUtils2.getUTCCurrentDateTimeString(EnvUtil.getDateTimePattern()),
-					DateTimeFormatter.ofPattern(EnvUtil.getDateTimePattern()));
-			cryptoReq.setTimeStamp(now);
-
 			RequestWrapper<CryptomanagerRequestDto> request = createRequestWrapper(cryptoReq);
+			cryptoReq.setTimeStamp(request.getRequesttime());
 
 			String responseStr = restUtil.postApi(ApiName.CRYPTOMANAGER_ENCRYPT, null, "", "",
 					MediaType.APPLICATION_JSON, request, String.class);
@@ -226,11 +222,4 @@ public class EncryptionUtil {
 		throw new DataEncryptionFailureException(e.getMessage(), e);
 	}
 
-	private String getHttpErrorBody(Exception e) {
-		if (e instanceof HttpClientErrorException) return ((HttpClientErrorException) e).getResponseBodyAsString();
-		if (e.getCause() instanceof HttpClientErrorException)
-			return ((HttpClientErrorException) e.getCause()).getResponseBodyAsString();
-		// similar for server exception...
-		return e.getMessage();
-	}
 }

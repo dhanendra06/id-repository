@@ -4,7 +4,6 @@ import java.io.IOException;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.retry.annotation.Backoff;
@@ -23,8 +22,8 @@ import io.mosip.kernel.websub.api.exception.WebSubClientException;
 @Component
 public class WebSubUtil {
 	@Autowired
-	private PublisherClient<String, EventModel, HttpHeaders> pb; 
-	   
+	private PublisherClient<String, EventModel, HttpHeaders> pb;
+
 
 	/** The config server file storage URL. */
 	@Value("${" + IdRepoConstants.WEB_SUB_PUBLISH_URL + "}")
@@ -43,10 +42,9 @@ public class WebSubUtil {
 		LOGGER.info(IdRepoSecurityManager.getUser(), LoggerFileConstant.REQUEST_ID.toString(),
 				requestId,
 				"Publish the update successfully");
-		
+
 	}
 
-	@Cacheable(value = "topics", key = "{#topic}")
 	public void registerTopic(String topic, String requestId) {
 		try {
 			pb.registerTopic(topic, partnerhuburl);

@@ -51,6 +51,20 @@ public class DigitalSignatureUtil {
 
 	private static final Logger LOGGER = IdRepoLogger.getLogger(DigitalSignatureUtil.class);
 
+	// DateTimeFormatter is thread-safe; reuse one instance instead of creating per call
+	private static volatile DateTimeFormatter REQUEST_TIME_FORMATTER;
+
+	private static DateTimeFormatter getFormatter() {
+		if (REQUEST_TIME_FORMATTER == null) {
+			synchronized (DigitalSignatureUtil.class) {
+				if (REQUEST_TIME_FORMATTER == null) {
+					REQUEST_TIME_FORMATTER = DateTimeFormatter.ofPattern(EnvUtil.getDateTimePattern());
+				}
+			}
+		}
+		return REQUEST_TIME_FORMATTER;
+	}
+
 
 
 	/**
@@ -77,10 +91,8 @@ public class DigitalSignatureUtil {
 			RequestWrapper<JWTSignatureRequestDto> request = new RequestWrapper<>();
 			request.setRequest(dto);
 			request.setMetadata(null);
-			DateTimeFormatter format = DateTimeFormatter.ofPattern(EnvUtil.getDateTimePattern());
-			LocalDateTime localdatetime = LocalDateTime
-					.parse(DateUtils2.getUTCCurrentDateTimeString(EnvUtil.getDateTimePattern()), format);
-			request.setRequesttime(localdatetime);
+			request.setRequesttime(LocalDateTime.parse(
+					DateUtils2.getUTCCurrentDateTimeString(EnvUtil.getDateTimePattern()), getFormatter()));
 			String responseString = restUtil.postApi(ApiName.KEYMANAGER_JWTSIGN, null, "", "",
 					MediaType.APPLICATION_JSON, request, String.class);
 
@@ -137,10 +149,8 @@ public class DigitalSignatureUtil {
 			RequestWrapper<VerCredSignatureRequestDto> request = new RequestWrapper<>();
 			request.setRequest(verCredDto);
 			request.setMetadata(null);
-			DateTimeFormatter format = DateTimeFormatter.ofPattern(EnvUtil.getDateTimePattern());
-			LocalDateTime localdatetime = LocalDateTime
-					.parse(DateUtils2.getUTCCurrentDateTimeString(EnvUtil.getDateTimePattern()), format);
-			request.setRequesttime(localdatetime);
+			request.setRequesttime(LocalDateTime.parse(
+					DateUtils2.getUTCCurrentDateTimeString(EnvUtil.getDateTimePattern()), getFormatter()));
 			String responseString = restUtil.postApi(ApiName.KEYMANAGER_VERCRED_SIGN, null, "", "",
 					MediaType.APPLICATION_JSON, request, String.class);
 
