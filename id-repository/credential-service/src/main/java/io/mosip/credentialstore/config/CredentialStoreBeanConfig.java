@@ -40,10 +40,12 @@ import io.mosip.idrepository.core.util.DummyPartnerCheckUtil;
 public class CredentialStoreBeanConfig {
 
 	// --- Thread Pool ---
-	@Value("${credential.service.executor.core-pool-size:10}")
+	// Each IdAuth request uses up to 3 pool tasks (sign + demo-ZK + bio-ZK).
+	// core=30 supports ~10 concurrent IdAuth requests without queuing.
+	@Value("${credential.service.executor.core-pool-size:30}")
 	private int executorCorePoolSize;
 
-	@Value("${credential.service.executor.max-pool-size:20}")
+	@Value("${credential.service.executor.max-pool-size:60}")
 	private int executorMaxPoolSize;
 
 	@Value("${credential.service.executor.queue-capacity:200}")
