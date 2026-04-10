@@ -5,6 +5,10 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import javax.sql.DataSource;
 
@@ -15,6 +19,7 @@ import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
@@ -150,5 +155,16 @@ public class BatchConfiguration {
 	@Bean
 	public AfterburnerModule afterburnerModule() {
 		return new AfterburnerModule();
+	}
+
+	@Bean(name = "callbackExecutor")
+	public ExecutorService callbackExecutor(
+			@Value("${credential.websub.callback.thread.count:5}") int callbackThreadCount) {
+		return new ThreadPoolExecutor(
+				callbackThreadCount, callbackThreadCount,
+				60L, TimeUnit.SECONDS,
+				new LinkedBlockingQueue<>(),
+				new ThreadPoolExecutor.CallerRunsPolicy()
+		);
 	}
 }

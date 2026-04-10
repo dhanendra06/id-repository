@@ -23,6 +23,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.batch.core.launch.JobLauncher;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -37,6 +38,7 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Nullable;
+import java.util.concurrent.ExecutorService;
 
 
 /**
@@ -65,6 +67,10 @@ public class CredentialRequestGeneratorController {
 
 	@Autowired
 	RequestValidator requestValidator;
+
+	@Autowired
+	@Qualifier("callbackExecutor")
+	private ExecutorService callbackExecutor;
 
 	/**
 	 * Credential issue.
@@ -168,8 +174,17 @@ public class CredentialRequestGeneratorController {
 			@ApiResponse(responseCode = "404", description = "Not Found" ,content = @Content(schema = @Schema(hidden = true))),
 			@ApiResponse(responseCode = "500", description = "Internal Server Error" ,content = @Content(schema = @Schema(hidden = true)))})
 	@PreAuthenticateContentAndVerifyIntent(secret = "test", callback = "/v1/credentialrequest/callback/notifyStatus", topic = "CREDENTIAL_STATUS_UPDATE")
-	public ResponseWrapper<?> handleSubscribeEvent( @RequestBody CredentialStatusEvent credentialStatusEvent) throws CredentialRequestGeneratorException {
-		credentialRequestService.updateCredentialStatus(credentialStatusEvent);
+	public ResponseWrapper<?> handleSubscribeEvent(@RequestBody CredentialStatusEvent credentialStatusEvent) {
+		callbackExecutor.submit(() -> {
+			try {
+				credentialRequestService.updateCredentialStatus(credentialStatusEvent);
+			} catch (Exception e) {
+				LOGGER.error("CredentialRequestGeneratorController", "handleSubscribeEvent",
+						"Error processing WebSub callback for requestId: "
+								+ (credentialStatusEvent.getEvent() != null ? credentialStatusEvent.getEvent().getRequestId() : "unknown"),
+						e.getMessage());
+			}
+		});
 		return new ResponseWrapper<>();
 	}
 

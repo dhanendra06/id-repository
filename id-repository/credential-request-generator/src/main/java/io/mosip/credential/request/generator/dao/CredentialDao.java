@@ -25,7 +25,7 @@ public class CredentialDao {
 	@Value("${credential.batch.status:NEW}")
 	private String status;
 
-	@Value("${credential.batch.page.size:100}")
+	@Value("${credential.batch.page.size:25}")
 	private int pageSize;
 
 	@Value("${credential.request.reprocess.statuscodes}")

@@ -25,6 +25,7 @@ import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 import org.springframework.batch.core.launch.JobLauncher;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import java.util.concurrent.ExecutorService;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithUserDetails;
@@ -56,6 +57,9 @@ public class CredentialRequestGeneratorControllerTest {
 
 	@Mock
 	private RequestValidator requestValidator;
+
+	@Mock
+	private ExecutorService callbackExecutor;
 
 	@InjectMocks
 	private CredentialRequestGeneratorController credentialRequestGeneratorController;

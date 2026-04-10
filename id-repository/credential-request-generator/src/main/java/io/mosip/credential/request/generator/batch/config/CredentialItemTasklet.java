@@ -19,7 +19,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.util.CollectionUtils;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 
@@ -178,6 +177,8 @@ public class CredentialItemTasklet implements Tasklet {
 					credential.setStatusCode("FAILED");
 					credential.setStatusComment(trimMessage.trimExceptionMessage(errorMessage));
 					credential.setRetryCount(credential.getRetryCount() != null ? credential.getRetryCount() + 1 : 1);
+				} finally {
+					credentialDao.save(credential);
 				}
 			}, ioThreadPool);
 			futures.add(future);
@@ -188,8 +189,6 @@ public class CredentialItemTasklet implements Tasklet {
 			LOGGER.error(IdRepoSecurityManager.getUser(), CREDENTIAL_ITEM_TASKLET, "batchid = " + batchId,
 					ExceptionUtils.getStackTrace(e));
 		}
-		if (!CollectionUtils.isEmpty(credentialEntities))
-			credentialDao.update(batchId, credentialEntities);
 
 		return RepeatStatus.FINISHED;
 	}
