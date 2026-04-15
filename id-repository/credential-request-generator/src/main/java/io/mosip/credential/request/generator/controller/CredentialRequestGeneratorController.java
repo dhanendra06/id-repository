@@ -28,6 +28,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.concurrent.DelegatingSecurityContextRunnable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -175,7 +176,7 @@ public class CredentialRequestGeneratorController {
 			@ApiResponse(responseCode = "500", description = "Internal Server Error" ,content = @Content(schema = @Schema(hidden = true)))})
 	@PreAuthenticateContentAndVerifyIntent(secret = "test", callback = "/v1/credentialrequest/callback/notifyStatus", topic = "CREDENTIAL_STATUS_UPDATE")
 	public ResponseWrapper<?> handleSubscribeEvent(@RequestBody CredentialStatusEvent credentialStatusEvent) {
-		callbackExecutor.submit(() -> {
+		callbackExecutor.submit(new DelegatingSecurityContextRunnable(() -> {
 			try {
 				credentialRequestService.updateCredentialStatus(credentialStatusEvent);
 			} catch (Exception e) {
@@ -184,7 +185,7 @@ public class CredentialRequestGeneratorController {
 								+ (credentialStatusEvent.getEvent() != null ? credentialStatusEvent.getEvent().getRequestId() : "unknown"),
 						e.getMessage());
 			}
-		});
+		}));
 		return new ResponseWrapper<>();
 	}
 
