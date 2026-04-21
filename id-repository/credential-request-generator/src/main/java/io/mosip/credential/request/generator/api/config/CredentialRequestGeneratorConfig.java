@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.context.annotation.*;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.security.task.DelegatingSecurityContextAsyncTaskExecutor;
 import io.mosip.credential.request.generator.util.CryptoUtil;
 
 import io.mosip.credential.request.generator.entity.CredentialEntity;
@@ -83,5 +85,20 @@ public class CredentialRequestGeneratorConfig extends HibernateDaoConfig {
 	public RestRequestBuilder getRestRequestBuilder() {
 		return new RestRequestBuilder(Arrays.stream(RestServicesConstants.values())
 				.map(RestServicesConstants::getServiceName).collect(Collectors.toList()));
+	}
+
+	/**
+	 * Default async executor for @Async methods (e.g. RestHelper.requestAsync).
+	 * Wraps a ThreadPoolTaskExecutor with DelegatingSecurityContextAsyncTaskExecutor
+	 * so the Spring Security context is propagated to async threads. Without this,
+	 * the WebClient auth filter (BeanConfig) cannot obtain the token in the async
+	 * thread and throws "ClientRequest must not be null".
+	 */
+	@Bean("taskExecutor")
+	public DelegatingSecurityContextAsyncTaskExecutor asyncTaskExecutor() {
+		ThreadPoolTaskExecutor delegate = new ThreadPoolTaskExecutor();
+		delegate.setThreadNamePrefix("credreq-async-");
+		delegate.initialize();
+		return new DelegatingSecurityContextAsyncTaskExecutor(delegate);
 	}
 }

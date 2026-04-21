@@ -180,7 +180,6 @@ public class ObjectStoreHelperTest {
 
     @Test
 	public void testDeleteBiometricObject() throws IdRepoAppException {
-		when(adapter.exists(any(), any(), any(), any(), any())).thenReturn(Boolean.TRUE);
 		when(adapter.deleteObject(any(), any(), any(), any(), any())).thenReturn(Boolean.TRUE);
 		helper.deleteBiometricObject("hash", "refId");
 		ArgumentCaptor<String> argCaptor = ArgumentCaptor.forClass(String.class);
@@ -190,8 +189,10 @@ public class ObjectStoreHelperTest {
 
 	@Test
 	public void testDeleteBiometricObjectNotExists() throws IdRepoAppException {
-		when(adapter.exists(any(), any(), any(), any(), any())).thenReturn(Boolean.FALSE);
+		// deleteObject is called unconditionally; S3 DELETE is idempotent for non-existent keys.
+		when(adapter.deleteObject(any(), any(), any(), any(), any())).thenReturn(Boolean.FALSE);
 		helper.deleteBiometricObject("hash", "refId");
+		verify(adapter).deleteObject(any(), any(), any(), any(), any());
 	}
 
 }

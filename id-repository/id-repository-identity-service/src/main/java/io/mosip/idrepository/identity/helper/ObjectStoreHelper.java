@@ -87,10 +87,11 @@ public class ObjectStoreHelper {
 	}
 
 	public void deleteBiometricObject(String uinHash, String fileRefId)  {
-		if (this.biometricObjectExists(uinHash, fileRefId)) {
-			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
-			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
-		}
+		// S3 DELETE is idempotent: deleting a non-existent key succeeds silently (204).
+		// Skipping the exists() pre-check avoids a redundant HEAD request and prevents
+		// S3Adapter from logging ERROR for expected 404s during extraction cleanup.
+		String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
+		objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
 	}
 
 	private boolean exists(String uinHash, boolean isBio, String fileRefId) {
