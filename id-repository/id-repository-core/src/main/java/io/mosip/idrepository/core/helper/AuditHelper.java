@@ -86,43 +86,7 @@ public class AuditHelper {
 	}
 
 	/**
-	 * Audit - asynchronously calls audit service (fire-and-forget).
-	 */
-	public void auditAsync(AuditModules module, AuditEvents event, String id, IdType idType, String desc) {
-		String requestId = (id != null) ? securityManager.hash(id.getBytes()) : null;
-
-		RequestWrapper<AuditRequestDTO> auditRequest = auditBuilder.buildRequest(
-				module, event, requestId, idType, desc);
-
-		RestRequestDTO restRequest;
-		try {
-			restRequest = restBuilder.buildRequest(
-					RestServicesConstants.AUDIT_MANAGER_SERVICE,
-					auditRequest,
-					AuditResponseDTO.class);
-
-			// Fire-and-forget async call
-			restHelper.requestAsync(restRequest)
-					.exceptionally(ex -> {
-						mosipLogger.error(IdRepoSecurityManager.getUser(),
-								"AuditHelper", "audit",
-								"Audit call failed: " + ExceptionUtils.getStackTrace(ex));
-						return null;   // swallow exception so it doesn't propagate
-					});
-
-		} catch (IdRepoDataValidationException e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(),
-					"AuditHelper", "audit",
-					"Failed to build audit request: " + ExceptionUtils.getStackTrace(e));
-		} catch (Exception e) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(),
-					"AuditHelper", "audit",
-					"Unexpected error building audit request: " + ExceptionUtils.getStackTrace(e));
-		}
-	}
-
-	/**
-	 * Audit error moved to Asynch.
+	 * Audit error.
 	 *
 	 * @param module the module
 	 * @param event the event
@@ -132,11 +96,11 @@ public class AuditHelper {
 	 */
 	public void auditError(AuditModules module, AuditEvents event, String id, IdType idType, Throwable e) {
 		try {
-			//this.audit(module, event, id, idType, mapper.writeValueAsString(IdRepoExceptionHandler.getAllErrors(e)));
-			this.auditAsync(module, event, id, idType, mapper.writeValueAsString(IdRepoExceptionHandler.getAllErrors(e)));
+			this.audit(module, event, id, idType, mapper.writeValueAsString(IdRepoExceptionHandler.getAllErrors(e)));
 		} catch (JsonProcessingException ex) {
 			mosipLogger.error(IdRepoSecurityManager.getUser(), "AuditRequestBuilder", "auditError",
 					"Exception : " + ExceptionUtils.getStackTrace(ex));
 		}
 	}
+
 }

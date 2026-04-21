@@ -19,6 +19,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClient.RequestBodySpec;
 import org.springframework.web.reactive.function.client.WebClient.ResponseSpec;
@@ -260,7 +262,14 @@ public class RestHelper {
 
 		monoResponse = exchange.bodyToMono(request.getResponseType());
 
-		return monoResponse;
+		// Propagate the Servlet SecurityContext into the Reactor subscriber context so
+		// that WebClient filters using Mono.deferContextual() (e.g. the auth-adapter's
+		// BeanConfig token-injection filter) can read the authentication token.
+		// Without this, the Reactor context is empty when WebClient is subscribed from
+		// a Servlet thread, causing the filter to pass null as the ClientRequest.
+		return monoResponse.contextWrite(
+				ReactiveSecurityContextHolder.withSecurityContext(
+						Mono.just(SecurityContextHolder.getContext())));
 	}
 
 	/**

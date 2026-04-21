@@ -166,7 +166,7 @@ public class CredentialRequestServiceImpl implements CredentialRequestService {
 			} else {
 				credentialIssueResponseWrapper.setResponse(credentialIssueResponse);
 			}
-			auditHelper.auditAsync(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.CREATING_CREDENTIAL_REQUEST, credentialIssueRequestDto.getId(), IdType.ID,"create credential request requested");
+			auditHelper.audit(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.CREATING_CREDENTIAL_REQUEST, credentialIssueRequestDto.getId(), IdType.ID,"create credential request requested");
 		}
 		return credentialIssueResponseWrapper;
 	}
@@ -219,7 +219,7 @@ public class CredentialRequestServiceImpl implements CredentialRequestService {
 			} else {
 				credentialIssueResponseWrapper.setResponse(credentialIssueResponse);
 			}
-			auditHelper.auditAsync(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.CREATING_CREDENTIAL_REQUEST, credentialIssueRequestDto.getId(), IdType.ID,"create credential request requested");
+			auditHelper.audit(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.CREATING_CREDENTIAL_REQUEST, credentialIssueRequestDto.getId(), IdType.ID,"create credential request requested");
 		}
 		return credentialIssueResponseWrapper;
 	}
@@ -299,7 +299,7 @@ public class CredentialRequestServiceImpl implements CredentialRequestService {
 			} else {
 				credentialIssueResponseWrapper.setResponse(credentialIssueResponse);
 			}
-			auditHelper.auditAsync(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.CANCEL_CREDENTIAL_REQUEST, requestId, IdType.ID,"Cancel the request");
+			auditHelper.audit(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.CANCEL_CREDENTIAL_REQUEST, requestId, IdType.ID,"Cancel the request");
 		}
 		return credentialIssueResponseWrapper;
 	}
@@ -400,7 +400,7 @@ public class CredentialRequestServiceImpl implements CredentialRequestService {
 			LOGGER.debug(IdRepoSecurityManager.getUser(), LoggerFileConstant.REQUEST_ID.toString(), requestId,
 					"ended updating  credential status");
 			//audit(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.UPDATE_CREDENTIAL_REQUEST, requestId, IdType.ID,"update the request");
-			auditHelper.auditAsync(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.UPDATE_CREDENTIAL_REQUEST, requestId, IdType.ID,"update the request");
+			auditHelper.audit(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.UPDATE_CREDENTIAL_REQUEST, requestId, IdType.ID,"update the request");
 		}catch (DataAccessLayerException e) {
 			LOGGER.error(IdRepoSecurityManager.getUser(), CREDENTIAL_SERVICE, UPDATE_STATUS_CREDENTIAL,
 					ExceptionUtils.getStackTrace(e));
@@ -572,7 +572,7 @@ public class CredentialRequestServiceImpl implements CredentialRequestService {
 			} else {
 				credentialIssueResponseWrapper.setResponse(credentialIssueResponse);
 			}
-			auditHelper.auditAsync(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.RETRY_CREDENTIAL_REQUEST,
+			auditHelper.audit(AuditModules.ID_REPO_CREDENTIAL_REQUEST_GENERATOR, AuditEvents.RETRY_CREDENTIAL_REQUEST,
 					requestId, IdType.ID, "retrigger the request");
 		}
 		return credentialIssueResponseWrapper;
