@@ -19,8 +19,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Async;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClient.RequestBodySpec;
 import org.springframework.web.reactive.function.client.WebClient.ResponseSpec;
@@ -150,72 +148,24 @@ public class RestHelper {
 	}
 
 	/**
-	 * Perfect async request method - fully non-blocking and type-safe
+	 * Request to send/receive HTTP requests and return the response asynchronously.
+	 *
+	 * @param request the request
+	 * @return the supplier
+	 * @throws RestServiceException
 	 */
 	@Async
 	public CompletableFuture<Object> requestAsync(@Valid RestRequestDTO request) {
 		mosipLogger.debug(IdRepoSecurityManager.getUser(), CLASS_REST_HELPER, METHOD_REQUEST_ASYNC,
 				PREFIX_REQUEST + request.getUri());
-
-		Mono<?> responseMono = request(request);   // your existing private method
-
-		if (request.getTimeout() != null && request.getTimeout() > 0) {
-			responseMono = responseMono.timeout(Duration.ofSeconds(request.getTimeout()));
-		}
-
-		return responseMono
-				.doOnSuccess(response -> {
-					if (response != null && !String.class.equals(request.getResponseType())) {
-						try {
-							checkErrorResponse(response, request.getResponseType());
-							if (RestUtil.containsError(response.toString(), mapper)) {
-								mosipLogger.debug("Error in response: {}", response.toString());
-							}
-						} catch (RestServiceException ex) {
-							throw new RuntimeException(ex); // wrapped for onErrorMap
-						}
-					}
-				})
-				.onErrorMap(WebClientResponseException.class, this::mapWebClientError)
-				.onErrorMap(TimeoutException.class, e ->
-						new IdRepoRetryException(new RestServiceException(CONNECTION_TIMED_OUT, e)))
-				.onErrorMap(RuntimeException.class, this::mapGenericRuntimeError)
-				.cast(Object.class)                    // ← This fixes the type issue
-				.toFuture();                           // Now safely returns CompletableFuture<Object>
-	}
-
-	/**
-	 * Maps WebClientResponseException using your existing handleStatusError logic
-	 */
-	private RestServiceException mapWebClientError(WebClientResponseException e) {
 		try {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), CLASS_REST_HELPER,
-					"Request failed with status code: " + e.getRawStatusCode(),
-					"\nResponse Body: " + e.getResponseBodyAsString());
-
-			// handleStatusError throws exception → we catch and return it
-			return handleStatusError(e, null);   // passing null is safe here because method handles it internally
-
-		} catch (RestServiceException ex) {
-			return ex;
-		} catch (Exception ex) {
-			mosipLogger.error(IdRepoSecurityManager.getUser(), CLASS_REST_HELPER, METHOD_HANDLE_STATUS_ERROR,
-					ex.getMessage(), ex);
-			return new RestServiceException(UNKNOWN_ERROR, ex);
+			Object obj =  requestSync(request);
+			return CompletableFuture.completedFuture(obj);
+		} catch (RestServiceException e) {
+			mosipLogger.error(IdRepoSecurityManager.getUser(), CLASS_REST_HELPER, METHOD_REQUEST_ASYNC,
+					ExceptionUtils.getStackTrace(e));
+			return CompletableFuture.failedFuture(e);
 		}
-	}
-
-	/**
-	 * Maps generic runtime errors
-	 */
-	private IdRepoRetryException mapGenericRuntimeError(RuntimeException e) {
-		mosipLogger.error(IdRepoSecurityManager.getUser(), CLASS_REST_HELPER, METHOD_REQUEST_ASYNC,
-				THROWING_REST_SERVICE_EXCEPTION + UNKNOWN_ERROR_LOG + ExceptionUtils.getStackTrace(e));
-
-		if (e.getCause() instanceof TimeoutException) {
-			return new IdRepoRetryException(new RestServiceException(CONNECTION_TIMED_OUT, e));
-		}
-		return new IdRepoRetryException(new RestServiceException(UNKNOWN_ERROR, e));
 	}
 
 	/**
@@ -262,14 +212,7 @@ public class RestHelper {
 
 		monoResponse = exchange.bodyToMono(request.getResponseType());
 
-		// Propagate the Servlet SecurityContext into the Reactor subscriber context so
-		// that WebClient filters using Mono.deferContextual() (e.g. the auth-adapter's
-		// BeanConfig token-injection filter) can read the authentication token.
-		// Without this, the Reactor context is empty when WebClient is subscribed from
-		// a Servlet thread, causing the filter to pass null as the ClientRequest.
-		return monoResponse.contextWrite(
-				ReactiveSecurityContextHolder.withSecurityContext(
-						Mono.just(SecurityContextHolder.getContext())));
+		return monoResponse;
 	}
 
 	/**
