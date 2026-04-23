@@ -44,8 +44,8 @@ public class IdrepositaryUtil {
 	private static final Logger LOGGER = IdRepoLogger.getLogger(IdrepositaryUtil.class);
 
 
-	@Cacheable(cacheNames = "IDREPO_DATA",
-			key = "{ #credentialServiceRequestDto.id, #credentialServiceRequestDto.additionalData?.get('idType'), #bioAttributeFormatterMap }")
+	//@Cacheable(cacheNames = "IDREPO_DATA",
+	//		key = "{ #credentialServiceRequestDto.id, #credentialServiceRequestDto.additionalData?.get('idType'), #bioAttributeFormatterMap }")
 	public IdResponseDTO getData(CredentialServiceRequestDto credentialServiceRequestDto,
 								 Map<String, String> bioAttributeFormatterMap)
 			throws ApiNotAccessibleException, IdRepoException, JsonParseException, JsonMappingException, IOException {
