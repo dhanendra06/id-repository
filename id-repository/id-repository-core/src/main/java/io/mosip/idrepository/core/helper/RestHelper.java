@@ -4,6 +4,7 @@ import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.CLIENT_ER
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.CONNECTION_TIMED_OUT;
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.SERVER_ERROR;
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.UNKNOWN_ERROR;
+import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.AUTHENTICATION_FAILED;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -311,10 +312,19 @@ public class RestHelper {
 			if (e.getStatusCode().is4xxClientError()) {
 				if (e.getRawStatusCode() == HttpStatus.UNAUTHORIZED.value()) {
 					List<ServiceError> errorList = ExceptionUtils.getServiceErrorList(e.getResponseBodyAsString());
+					if (errorList.isEmpty()) {
+						throw new AuthenticationException(AUTHENTICATION_FAILED.getErrorCode(),
+								AUTHENTICATION_FAILED.getErrorMessage(), e.getRawStatusCode());
+					}
 					throw new AuthenticationException(errorList.get(0).getErrorCode(), errorList.get(0).getMessage(),
 							e.getRawStatusCode());
 				} else if (e.getRawStatusCode() == HttpStatus.FORBIDDEN.value()) {
 					List<ServiceError> errorList = ExceptionUtils.getServiceErrorList(e.getResponseBodyAsString());
+					if (errorList.isEmpty()) {
+						throw new IdRepoRetryException(new AuthenticationException(
+								AUTHENTICATION_FAILED.getErrorCode(),
+								AUTHENTICATION_FAILED.getErrorMessage(), e.getRawStatusCode()));
+					}
 					throw new IdRepoRetryException(new AuthenticationException(errorList.get(0).getErrorCode(),
 							errorList.get(0).getMessage(), e.getRawStatusCode()));
 				} else {

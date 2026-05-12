@@ -4,7 +4,9 @@ import java.util.Arrays;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.caffeine.CaffeineCache;
 import org.springframework.cache.support.SimpleCacheManager;
@@ -125,8 +127,8 @@ public class CredentialStoreBeanConfig {
 	}
 
 	@Bean
-	public RestHelper restHelper() {
-		return new RestHelper();
+	public RestHelper restHelper(@Qualifier("selfTokenWebClient") WebClient webClient) {
+		return new RestHelper(webClient);
 	}
 
 
