@@ -33,13 +33,7 @@ import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-import org.springframework.core.env.Environment;
 import org.springframework.web.reactive.function.client.WebClient;
-
-import io.mosip.idrepository.core.config.SelfTokenWebClientFilterFunction;
-import io.mosip.kernel.auth.defaultadapter.helper.TokenHelper;
-import io.mosip.kernel.auth.defaultadapter.helper.TokenValidationHelper;
-import io.mosip.kernel.auth.defaultadapter.model.TokenHolder;
 
 import com.fasterxml.jackson.module.afterburner.AfterburnerModule;
 
@@ -169,26 +163,13 @@ public class VidRepoConfig {
 		return em;
 	}
 
-	@Bean("fixedSelfTokenWebClient")
-	public WebClient fixedSelfTokenWebClient(
-			@Qualifier("plainWebClient") WebClient plainWebClient,
-			TokenHolder<String> cachedTokenObject,
-			TokenHelper tokenHelper,
-			TokenValidationHelper tokenValidationHelper,
-			Environment environment) {
-		String appName = environment.getProperty("spring.application.name", "");
-		SelfTokenWebClientFilterFunction filter = new SelfTokenWebClientFilterFunction(
-				environment, plainWebClient, cachedTokenObject, tokenHelper, tokenValidationHelper, appName);
-		return WebClient.builder().filter(filter).build();
-	}
-
 	@Bean
-	public CredentialServiceManager credentialServiceManager(@Qualifier("fixedSelfTokenWebClient") WebClient webClient) {
+	public CredentialServiceManager credentialServiceManager(@Qualifier("selfTokenWebClient") WebClient webClient) {
 		return new CredentialServiceManager(restHelperWithAuth(webClient));
 	}
 	
 	@Bean
-	public RestHelper restHelperWithAuth(@Qualifier("fixedSelfTokenWebClient") WebClient webClient) {
+	public RestHelper restHelperWithAuth(@Qualifier("selfTokenWebClient") WebClient webClient) {
 		return new RestHelper(webClient);
 	}
 

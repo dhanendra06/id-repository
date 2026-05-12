@@ -19,14 +19,11 @@ import io.mosip.credential.request.generator.entity.CredentialEntity;
 import io.mosip.credential.request.generator.interceptor.CredentialTransactionInterceptor;
 import io.mosip.credential.request.generator.util.RestUtil;
 import io.mosip.idrepository.core.builder.RestRequestBuilder;
-import io.mosip.idrepository.core.config.SelfTokenWebClientFilterFunction;
+import io.mosip.idrepository.core.helper.RestHelper;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.web.reactive.function.client.WebClient;
 import io.mosip.idrepository.core.constant.RestServicesConstants;
 import io.mosip.idrepository.core.helper.RestHelper;
-import io.mosip.kernel.auth.defaultadapter.helper.TokenHelper;
-import io.mosip.kernel.auth.defaultadapter.helper.TokenValidationHelper;
-import io.mosip.kernel.auth.defaultadapter.model.TokenHolder;
-import org.springframework.core.env.Environment;
-import org.springframework.web.reactive.function.client.WebClient;
 import io.mosip.kernel.dataaccess.hibernate.config.HibernateDaoConfig;
 import io.mosip.kernel.dataaccess.hibernate.repository.impl.HibernateRepositoryImpl;
 import io.swagger.v3.oas.models.Components;
@@ -88,21 +85,8 @@ public class CredentialRequestGeneratorConfig extends HibernateDaoConfig {
 				.build();
 	}
 	
-	@Bean("fixedSelfTokenWebClient")
-	public WebClient fixedSelfTokenWebClient(
-			@Qualifier("plainWebClient") WebClient plainWebClient,
-			TokenHolder<String> cachedTokenObject,
-			TokenHelper tokenHelper,
-			TokenValidationHelper tokenValidationHelper,
-			Environment environment) {
-		String appName = environment.getProperty("spring.application.name", "");
-		SelfTokenWebClientFilterFunction filter = new SelfTokenWebClientFilterFunction(
-				environment, plainWebClient, cachedTokenObject, tokenHelper, tokenValidationHelper, appName);
-		return WebClient.builder().filter(filter).build();
-	}
-
 	@Bean
-	public RestHelper restHelper(@Qualifier("fixedSelfTokenWebClient") WebClient webClient) {
+	public RestHelper restHelper(@Qualifier("selfTokenWebClient") WebClient webClient) {
 		return new RestHelper(webClient);
 	}
 

@@ -6,13 +6,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.env.Environment;
 import org.springframework.web.reactive.function.client.WebClient;
-
-import io.mosip.idrepository.core.config.SelfTokenWebClientFilterFunction;
-import io.mosip.kernel.auth.defaultadapter.helper.TokenHelper;
-import io.mosip.kernel.auth.defaultadapter.helper.TokenValidationHelper;
-import io.mosip.kernel.auth.defaultadapter.model.TokenHolder;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.caffeine.CaffeineCache;
 import org.springframework.cache.support.SimpleCacheManager;
@@ -132,21 +126,8 @@ public class CredentialStoreBeanConfig {
 
 	}
 
-	@Bean("fixedSelfTokenWebClient")
-	public WebClient fixedSelfTokenWebClient(
-			@Qualifier("plainWebClient") WebClient plainWebClient,
-			TokenHolder<String> cachedTokenObject,
-			TokenHelper tokenHelper,
-			TokenValidationHelper tokenValidationHelper,
-			Environment environment) {
-		String appName = environment.getProperty("spring.application.name", "");
-		SelfTokenWebClientFilterFunction filter = new SelfTokenWebClientFilterFunction(
-				environment, plainWebClient, cachedTokenObject, tokenHelper, tokenValidationHelper, appName);
-		return WebClient.builder().filter(filter).build();
-	}
-
 	@Bean
-	public RestHelper restHelper(@Qualifier("fixedSelfTokenWebClient") WebClient webClient) {
+	public RestHelper restHelper(@Qualifier("selfTokenWebClient") WebClient webClient) {
 		return new RestHelper(webClient);
 	}
 
