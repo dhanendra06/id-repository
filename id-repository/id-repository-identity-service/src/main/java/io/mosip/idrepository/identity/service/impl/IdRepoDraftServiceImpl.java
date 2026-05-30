@@ -214,15 +214,23 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 
 			if (Objects.nonNull(uin)) {
 				Optional<Uin> uinObjectOptional = super.uinRepo.findByUinHash(super.getUinHash(uin));
-				if (uinObjectOptional.isEmpty()) {
-					idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
-							CREATE_DRAFT, "UIN NOT EXIST | uin=<redacted>");
-					throw new IdRepoAppException(NO_RECORD_FOUND);
+				if (uinObjectOptional.isPresent()) {
+					// Existing identity — clone its data into the draft (UPDATE / re-registration flow).
+					Uin uinObject = uinObjectOptional.get();
+					newDraft = mapper.convertValue(uinObject, UinDraft.class);
+					updateBiometricAndDocumentDrafts(registrationId, newDraft, uinObject);
+					newDraft.setUin(super.getUinToEncrypt(uin));
+				} else {
+					// Brand-new identity with a pre-allocated UIN (NEW packet flow from create_draft stage).
+					// The UIN was issued by the kernel UIN generator but is not yet persisted in the
+					// uin table; treat this as a new draft initialization using the provided UIN.
+					newDraft = new UinDraft();
+					newDraft.setUin(super.getUinToEncrypt(uin));
+					newDraft.setUinHash(super.getUinHash(uin));
+					byte[] uinData = convertToBytes(generateIdentityObject(uin));
+					newDraft.setUinData(uinData);
+					newDraft.setUinDataHash(securityManager.hash(uinData));
 				}
-				Uin uinObject = uinObjectOptional.get();
-				newDraft = mapper.convertValue(uinObject, UinDraft.class);
-				updateBiometricAndDocumentDrafts(registrationId, newDraft, uinObject);
-				newDraft.setUin(super.getUinToEncrypt(uin));
 			} else {
 				// Brand-new identity — generate a UIN.
 				newDraft = new UinDraft();
