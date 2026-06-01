@@ -25,6 +25,8 @@ import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.UIN_GENER
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.UIN_HASH_MISMATCH;
 import static io.mosip.idrepository.core.constant.IdRepoErrorConstants.UNKNOWN_ERROR;
 
+import io.mosip.idrepository.core.constant.IdRepoErrorConstants;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -395,6 +397,19 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 	// Cannot use NOT_SUPPORTED here: draft.getUinData() and draft.getDocuments()
 	// are lazy fields — they require an open Hibernate session to load.
 	public IdResponseDTO getDraft(String regId, Map<String, String> extractionFormats) throws IdRepoAppException {
+		return getDraft(regId, extractionFormats, null);
+	}
+
+	/**
+	 * Granular draft retrieval. {@code type} selects which slice of the draft to return:
+	 * {@code "demographics"}, {@code "biometrics"}, {@code "all"} or {@code null} (default = all).
+	 * Existing callers that use the single-arg overload continue to receive everything
+	 * (backward compatible).
+	 */
+	@Override
+	public IdResponseDTO getDraft(String regId, Map<String, String> extractionFormats, String type)
+			throws IdRepoAppException {
+		final String requestedType = normalizeType(type);
 		try {
 			Optional<UinDraft> uinDraft = uinDraftRepo.findByRegId(regId);
 			if (uinDraft.isEmpty()) {
@@ -407,23 +422,55 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 			String uinHash = draft.getUinHash().split(SPLITTER)[1];
 			List<DocumentsDTO> documents = new ArrayList<>();
 
-			for (UinBiometricDraft bioDraft : draft.getBiometrics()) {
-				byte[] cbeff = extractAndGetCombinedCbeff(uinHash, bioDraft.getBioFileId(), extractionFormats);
-				documents.add(new DocumentsDTO(bioDraft.getBiometricFileType(),
-						CryptoUtil.encodeToURLSafeBase64(cbeff)));
+			final boolean includeBiometrics = "biometrics".equals(requestedType) || "all".equals(requestedType);
+			final boolean includeSupportingDocuments = "all".equals(requestedType);
+			final boolean includeIdentity = "demographics".equals(requestedType) || "all".equals(requestedType);
+
+			if (includeBiometrics) {
+				for (UinBiometricDraft bioDraft : draft.getBiometrics()) {
+					byte[] cbeff = extractAndGetCombinedCbeff(uinHash, bioDraft.getBioFileId(), extractionFormats);
+					documents.add(new DocumentsDTO(bioDraft.getBiometricFileType(),
+							CryptoUtil.encodeToURLSafeBase64(cbeff)));
+				}
 			}
-			for (UinDocumentDraft docDraft : draft.getDocuments()) {
-				byte[] docBytes = objectStoreHelper.getDemographicObject(uinHash, docDraft.getDocId());
-				documents.add(new DocumentsDTO(docDraft.getDoccatCode(),
-						CryptoUtil.encodeToURLSafeBase64(docBytes)));
+			if (includeSupportingDocuments) {
+				for (UinDocumentDraft docDraft : draft.getDocuments()) {
+					byte[] docBytes = objectStoreHelper.getDemographicObject(uinHash, docDraft.getDocId());
+					documents.add(new DocumentsDTO(docDraft.getDoccatCode(),
+							CryptoUtil.encodeToURLSafeBase64(docBytes)));
+				}
 			}
 
-			return constructIdResponse(draft.getUinData(), draft.getStatusCode(), documents, null);
+			byte[] identityPayload = includeIdentity ? draft.getUinData() : null;
+			List<DocumentsDTO> documentsPayload = documents.isEmpty() ? null : documents;
+			return constructIdResponse(identityPayload, draft.getStatusCode(), documentsPayload, null);
 
 		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
 			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
 					GET_DRAFT, e.getMessage());
 			throw new IdRepoAppException(DATABASE_ACCESS_ERROR, e);
+		}
+	}
+
+	/**
+	 * Validates and normalizes the {@code type} query parameter. Returns the
+	 * canonical lowercase value; defaults to {@code "all"} when null/blank.
+	 */
+	private String normalizeType(String type) throws IdRepoAppException {
+		if (type == null || type.trim().isEmpty()) {
+			return "all";
+		}
+		String normalized = type.trim().toLowerCase();
+		switch (normalized) {
+			case "demographics":
+			case "biometrics":
+			case "all":
+				return normalized;
+			default:
+				idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
+						GET_DRAFT, "Invalid type query parameter: " + type);
+				throw new IdRepoAppException(IdRepoErrorConstants.INVALID_INPUT_PARAMETER.getErrorCode(),
+						String.format(IdRepoErrorConstants.INVALID_INPUT_PARAMETER.getErrorMessage(), "type"));
 		}
 	}
 

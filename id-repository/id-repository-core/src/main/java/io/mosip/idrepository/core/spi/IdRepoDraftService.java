@@ -24,7 +24,21 @@ public interface IdRepoDraftService<REQUEST, RESPONSE> {
 	public boolean hasDraft(String registrationId) throws IdRepoAppException;
 	
 	public RESPONSE getDraft(String registrationId, Map<String, String> extractionFormats) throws IdRepoAppException;
-	
+
+	/**
+	 * Granular draft retrieval.
+	 *
+	 * @param type one of {@code "demographics"}, {@code "biometrics"}, {@code "all"},
+	 *             or {@code null}/empty (defaults to {@code "all"}).
+	 *             <ul>
+	 *               <li>{@code "demographics"} — identity (UIN data) only, no documents.</li>
+	 *               <li>{@code "biometrics"} — biometric documents only, no identity.</li>
+	 *               <li>{@code "all"} (default) — both identity and all documents.</li>
+	 *             </ul>
+	 */
+	public RESPONSE getDraft(String registrationId, Map<String, String> extractionFormats, String type)
+			throws IdRepoAppException;
+
 	public RESPONSE extractBiometrics(String registrationId, Map<String, String> extractionFormats) throws IdRepoAppException;
 
     public DraftResponseDto getDraftUin(String uin) throws IdRepoAppException;

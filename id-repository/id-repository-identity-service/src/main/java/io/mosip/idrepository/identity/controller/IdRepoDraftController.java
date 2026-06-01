@@ -244,6 +244,50 @@ public class IdRepoDraftController {
 					IdType.ID, "Publish draft requested");
 		}
 	}
+
+	/**
+	 * V2 of the get-draft endpoint with granular retrieval via the {@code type}
+	 * query parameter. Accepts one of {@code demographics}, {@code biometrics},
+	 * {@code all} (default when omitted/null).
+	 *
+	 * <p>Path: {@code GET /draft/v2/{registrationId}?type=demographics|biometrics|all}
+	 *
+	 * <p>The v1 endpoint above is preserved and continues to return everything,
+	 * keeping existing clients fully backward-compatible.
+	 */
+	@PreAuthorize("hasAnyRole(@authorizedRoles.getGetdraftregistrationId())")
+	@GetMapping(path = "/v2/{registrationId}", produces = MediaType.APPLICATION_JSON_VALUE)
+	@Operation(summary = "getDraftV2",
+			description = "Granular draft retrieval. Use ?type=demographics|biometrics|all.",
+			tags = { "id-repo-draft-controller" })
+	@ApiResponses(value = {
+			@ApiResponse(responseCode = "200", description = "OK"),
+			@ApiResponse(responseCode = "400", description = "Bad Request" , content = @Content(schema = @Schema(hidden = true))),
+			@ApiResponse(responseCode = "401", description = "Unauthorized" , content = @Content(schema = @Schema(hidden = true))),
+			@ApiResponse(responseCode = "403", description = "Forbidden" , content = @Content(schema = @Schema(hidden = true))),
+			@ApiResponse(responseCode = "404", description = "Not Found" , content = @Content(schema = @Schema(hidden = true))),
+	})
+	public ResponseEntity<IdResponseDTO> getDraftV2(@PathVariable String registrationId,
+			@RequestParam(name = FINGER_EXTRACTION_FORMAT, required = false) @Nullable String fingerExtractionFormat,
+			@RequestParam(name = IRIS_EXTRACTION_FORMAT, required = false) @Nullable String irisExtractionFormat,
+			@RequestParam(name = FACE_EXTRACTION_FORMAT, required = false) @Nullable String faceExtractionFormat,
+			@RequestParam(name = "type", required = false) @Nullable String type)
+			throws IdRepoAppException {
+		try {
+			return new ResponseEntity<>(draftService.getDraft(registrationId,
+					buildExtractionFormatMap(fingerExtractionFormat, irisExtractionFormat, faceExtractionFormat),
+					type),
+					HttpStatus.OK);
+		} catch (IdRepoAppException e) {
+			auditHelper.auditError(AuditModules.ID_REPO_CORE_SERVICE, AuditEvents.GET_DRAFT_REQUEST_RESPONSE, registrationId,
+					IdType.ID, e);
+			mosipLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_CONTROLLER, "getDraftV2", e.getMessage());
+			throw new IdRepoAppException(e.getErrorCode(), e.getErrorText(), e);
+		} finally {
+			auditHelper.audit(AuditModules.ID_REPO_CORE_SERVICE, AuditEvents.GET_DRAFT_REQUEST_RESPONSE, registrationId,
+					IdType.ID, "Get draft v2 requested");
+		}
+	}
 	
 	//@PreAuthorize("hasAnyRole('REGISTRATION_PROCESSOR')")
 	@PreAuthorize("hasAnyRole(@authorizedRoles.getPutdraftextractbiometricsregistrationId())")
