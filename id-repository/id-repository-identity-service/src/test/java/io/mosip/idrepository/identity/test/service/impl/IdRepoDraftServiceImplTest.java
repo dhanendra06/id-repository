@@ -317,25 +317,20 @@ public class IdRepoDraftServiceImplTest {
 		assertNotNull(idresponse);
 	}
 
-	@Test
-	public void testCreateDraftWithPreallocatedUinNotYetInRepo()
-			throws IdRepoAppException, NoSuchAlgorithmException, IOException {
+	@Test(expected = IdRepoAppException.class)
+	public void testCreateDraftwithIdRepoAppException() throws IdRepoAppException {
 		ReflectionTestUtils.setField(idRepoServiceImpl, "securityManager", securityManager);
 		ReflectionTestUtils.setField(idRepoServiceImpl, "mapper", mapper);
 		when(uinHistoryRepo.existsByRegId(Mockito.any())).thenReturn(false);
 		when(uinDraftRepo.existsByRegId(Mockito.any())).thenReturn(false);
-		when(uinEncryptSaltRepo.retrieveSaltById(Mockito.anyInt())).thenReturn("1234567");
 		when(securityManager.getSaltKeyForId(Mockito.anyString())).thenReturn(1234);
 		when(uinHashSaltRepo.retrieveSaltById(Mockito.anyInt())).thenReturn("12345");
 		when(securityManager.hashwithSalt(Mockito.any(), Mockito.any()))
-				.thenReturn("5B72C3B57A72C6497461289FCA7B1F865ED6FB0596B446FEA1F92AF931A5D4B7");
-		String identityData = IOUtils.toString(
-				this.getClass().getClassLoader().getResourceAsStream("identity-data.json"), StandardCharsets.UTF_8);
-		when(securityManager.hash(Mockito.any())).thenReturn(DatatypeConverter
-				.printHexBinary(MessageDigest.getInstance("SHA-256").digest(identityData.getBytes())).toUpperCase());
-		when(uinRepo.findByUinHash(Mockito.any())).thenReturn(Optional.empty());
+				.thenReturn("1234_5B72C3B57A72C6497461289FCA7B1F865ED6FB0596B446FEA1F92AF931A5D4B7");
+		Optional<Uin> uinOpt = Optional.empty();
+		when(uinRepo.findByUinHash(Mockito.any())).thenReturn(uinOpt);
 		IdResponseDTO idresponse = idRepoServiceImpl.createDraft("1234567890", "2419762130");
-		assertNotNull(idresponse);
+		assertNull(idresponse);
 	}
 
 	@Test(expected = IdRepoAppException.class)
