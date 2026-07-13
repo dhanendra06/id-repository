@@ -37,14 +37,7 @@ import io.mosip.idrepository.identity.helper.AnonymousProfileHelper;
 import io.mosip.idrepository.identity.helper.ObjectStoreHelper;
 import io.mosip.idrepository.identity.helper.IdRepoServiceHelper;
 import io.mosip.idrepository.identity.helper.VidDraftHelper;
-import io.mosip.idrepository.identity.repository.IdentityUpdateTrackerRepo;
-import io.mosip.idrepository.identity.repository.UinBiometricHistoryRepo;
-import io.mosip.idrepository.identity.repository.UinBiometricRepo;
-import io.mosip.idrepository.identity.repository.UinDocumentHistoryRepo;
-import io.mosip.idrepository.identity.repository.UinDocumentRepo;
-import io.mosip.idrepository.identity.repository.UinDraftRepo;
-import io.mosip.idrepository.identity.repository.UinHistoryRepo;
-import io.mosip.idrepository.identity.repository.UinRepo;
+import io.mosip.idrepository.identity.repository.*;
 import io.mosip.idrepository.identity.service.impl.DefaultShardResolver;
 import io.mosip.idrepository.identity.service.impl.IdRepoDraftServiceImpl;
 import io.mosip.idrepository.identity.service.impl.IdRepoProxyServiceImpl;
@@ -130,6 +123,12 @@ public class IdRepoDraftServiceImplTest {
 
 	@Mock
 	private UinDocumentRepo uinDocumentRepo;
+
+	@Mock
+	private UinBiometricDraftRepo uinBiometricDraftRepo;
+
+	@Mock
+	private UinDocumentDraftRepo uinDocumentDraftRepo;
 
 	@Mock
 	private VidDraftHelper vidDraftHelper;
@@ -231,6 +230,8 @@ public class IdRepoDraftServiceImplTest {
 		ReflectionTestUtils.setField(idRepoServiceImpl, "anonymousProfileHelper", anonymousProfileHelper);
 		ReflectionTestUtils.setField(idRepoServiceImpl, "validator", validator);
 		ReflectionTestUtils.setField(idRepoServiceImpl, "objectStoreHelper", objectStoreHelper);
+		ReflectionTestUtils.setField(idRepoServiceImpl, "uinBiometricDraftRepo", uinBiometricDraftRepo);
+		ReflectionTestUtils.setField(idRepoServiceImpl, "uinDocumentDraftRepo", uinDocumentDraftRepo);
 		ReflectionTestUtils.setField(idRepoServiceImpl, "cbeffUtil", cbeffUtil);
 		ReflectionTestUtils.setField(idRepoServiceImpl, "uinEncryptSaltRepo", uinEncryptSaltRepo);
 		ReflectionTestUtils.setField(idRepoServiceImpl, "uinBiometricRepo", uinBiometricRepo);
@@ -692,11 +693,41 @@ public class IdRepoDraftServiceImplTest {
 		uin.setUinData("274390482564".getBytes());
 		uin.setUinDataHash(DatatypeConverter
 				.printHexBinary(MessageDigest.getInstance("SHA-256").digest("2419762130".getBytes())).toUpperCase());
+		uin.setBiometrics(new ArrayList<>());
+		uin.setDocuments(new ArrayList<>());
 		Optional<UinDraft> uinOpt = Optional.of(uin);
 		when(uinDraftRepo.findByRegId(Mockito.any())).thenReturn(uinOpt);
 		when(uinDraftRepo.existsByRegId(Mockito.any())).thenReturn(true);
 		IdResponseDTO response = idRepoServiceImpl.discardDraft("1234567890");
 		assertNotNull(response);
+	}
+
+	@Test
+	public void testDiscardDraftWithBiometricsAndDocuments() throws IdRepoAppException, NoSuchAlgorithmException {
+		UinDraft uin = new UinDraft();
+		uin.setUin("274390482564");
+		String uinHash = DatatypeConverter
+				.printHexBinary(MessageDigest.getInstance("SHA-256").digest("2419762130".getBytes())).toUpperCase();
+		uin.setUinHash("123_" + uinHash);
+		uin.setRegId("1234567890");
+		UinBiometricDraft bio = new UinBiometricDraft();
+		bio.setBioFileId("bioFile123");
+		List<UinBiometricDraft> bioList = new ArrayList<>();
+		bioList.add(bio);
+		uin.setBiometrics(bioList);
+		UinDocumentDraft doc = new UinDocumentDraft();
+		doc.setDocId("docFile123");
+		List<UinDocumentDraft> docList = new ArrayList<>();
+		docList.add(doc);
+		uin.setDocuments(docList);
+		Optional<UinDraft> uinOpt = Optional.of(uin);
+		when(uinDraftRepo.findByRegId(Mockito.any())).thenReturn(uinOpt);
+		IdResponseDTO response = idRepoServiceImpl.discardDraft("1234567890");
+		assertNotNull(response);
+		Mockito.verify(objectStoreHelper).deleteBiometricObject(uinHash, "bioFile123");
+		Mockito.verify(objectStoreHelper).deleteDemographicObject(uinHash, "docFile123");
+		Mockito.verify(uinBiometricDraftRepo).deleteByRegId("1234567890");
+		Mockito.verify(uinDocumentDraftRepo).deleteByRegId("1234567890");
 	}
 
 	@Test(expected = IdRepoAppException.class)
@@ -825,7 +856,7 @@ public class IdRepoDraftServiceImplTest {
 	@Test
 	public void testDiscardDraftJDBCConnectionException() throws IdRepoAppException {
 		try {
-			when(uinDraftRepo.existsByRegId(Mockito.any())).thenThrow(JDBCConnectionException.class);
+			when(uinDraftRepo.findByRegId(Mockito.any())).thenThrow(JDBCConnectionException.class);
 			IdResponseDTO response = idRepoServiceImpl.discardDraft("123567890");
 			assertNotNull(response);
 		} catch (IdRepoAppException e) {
