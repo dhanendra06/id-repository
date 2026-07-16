@@ -425,40 +425,28 @@ public class IdRepoProxyServiceImpl implements IdRepoService<IdRequestDTO, IdRes
 			List<CompletableFuture<List<BIR>>> extractionFutures = new ArrayList<>();
 
 			for (BiometricType modality : SUPPORTED_MODALITIES) {
-				List<BIR> allBirsForModality = originalBirs.stream()
+				List<BIR> birTypesForModality = originalBirs.stream()
 						.filter(bir -> {
 							List<BiometricType> types = bir.getBdbInfo().getType();
 							return !types.isEmpty() && types.get(0).value().equalsIgnoreCase(modality.value());
-						})
-						.collect(Collectors.toList());
-				// Exception BIRs (EXCEPTION=true) are always passed through as-is — they must
-				// not be sent to the extractor but must be preserved in the returned CBEFF so
-				// that downstream stages can identify exception-marked modalities.
-				List<BIR> exceptionBirs = allBirsForModality.stream()
-						.filter(bir -> {
+						})						.filter(bir -> {
 							Map<String, String> others = bir.getOthers();
-							return others != null && "true".equalsIgnoreCase(others.get("EXCEPTION"));
-						})
-						.collect(Collectors.toList());
-				List<BIR> capturedBirs = allBirsForModality.stream()
-						.filter(bir -> {
-							Map<String, String> others = bir.getOthers();
-							return others == null || !"true".equalsIgnoreCase(others.get("EXCEPTION"));
+							return others == null || "false".equalsIgnoreCase(others.get("EXCEPTION"));
 						})
 						.collect(Collectors.toList());
 				Optional<Entry<String, String>> extractionFormatForModality = extractionFormats.entrySet().stream()
 						.filter(ent -> ent.getKey().toLowerCase().contains(modality.value().toLowerCase())).findAny();
 
-				if (!extractionFormatForModality.isEmpty() && !capturedBirs.isEmpty()) {
+				if (!extractionFormatForModality.isEmpty()&& !birTypesForModality.isEmpty()) {
 					Entry<String, String> format = extractionFormatForModality.get();
 					CompletableFuture<List<BIR>> extractTemplateFuture = biometricExtractionService.extractTemplate(
-							uinHash, fileName, format.getKey(), format.getValue(), capturedBirs);
+							uinHash, fileName, format.getKey(), format.getValue(), birTypesForModality);
 					extractionFutures.add(extractTemplateFuture);
-					finalBirs.addAll(exceptionBirs);
+
 				} else {
 					mosipLogger.info(IdRepoSecurityManager.getUser(), ID_REPO_SERVICE_IMPL, "extractTemplate",
 							"GETTING NON EXTRACTED FORMAT for Modality: " + modality.name());
-					finalBirs.addAll(allBirsForModality);
+					finalBirs.addAll(birTypesForModality);
 				}
 			}
 
