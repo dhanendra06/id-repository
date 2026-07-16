@@ -76,7 +76,9 @@ import io.mosip.idrepository.identity.entity.UinDocumentDraft;
 import io.mosip.idrepository.identity.entity.UinDraft;
 import io.mosip.idrepository.identity.helper.IdRepoServiceHelper;
 import io.mosip.idrepository.identity.helper.VidDraftHelper;
-import io.mosip.idrepository.identity.repository.*;
+import io.mosip.idrepository.identity.repository.UinBiometricRepo;
+import io.mosip.idrepository.identity.repository.UinDocumentRepo;
+import io.mosip.idrepository.identity.repository.UinDraftRepo;
 import io.mosip.idrepository.identity.validator.IdRequestValidator;
 import io.mosip.kernel.core.logger.spi.Logger;
 import io.mosip.kernel.core.util.CryptoUtil;
@@ -169,12 +171,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 
 	@Autowired
 	private UinDraftRepo uinDraftRepo;
-
-	@Autowired
-    private UinBiometricDraftRepo uinBiometricDraftRepo;
-
-	@Autowired
-    private UinDocumentDraftRepo uinDocumentDraftRepo;
 
 	@Autowired
 	private IdRequestValidator validator;
@@ -364,30 +360,16 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 	@Override
 	public IdResponseDTO discardDraft(String regId) throws IdRepoAppException {
 		try {
-			Optional<UinDraft> draftOptional = uinDraftRepo.findByRegId(regId);
-			if (draftOptional.isPresent()) {
-				UinDraft draft = draftOptional.get();
-				String uinHash = draft.getUinHash().split(SPLITTER)[1];
-				if (draft.getBiometrics() != null) {
-					for (UinBiometricDraft bio : draft.getBiometrics()) {
-						super.objectStoreHelper.deleteBiometricObject(uinHash, bio.getBioFileId());
-					}
-				}
-				if (draft.getDocuments() != null) {
-					for (UinDocumentDraft doc : draft.getDocuments()) {
-						super.objectStoreHelper.deleteDemographicObject(uinHash, doc.getDocId());
-					}
-				}
-				deleteDraftDbRecords(regId, draft);
-				return constructIdResponse(null, "DISCARDED", null, null);
-			} else {
-				idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, DISCARD_DRAFT,
-						"RID NOT FOUND IN DB");
+			if (!uinDraftRepo.existsByRegId(regId)) {
+				idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
+						DISCARD_DRAFT, "RID NOT FOUND IN DB | regId=" + regId);
 				throw new IdRepoAppException(NO_RECORD_FOUND);
 			}
+			uinDraftRepo.deleteByRegId(regId);
+			return constructIdResponse(null, "DISCARDED", null, null);
 		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
-			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL, DISCARD_DRAFT,
-					e.getMessage());
+			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
+					DISCARD_DRAFT, e.getMessage());
 			throw new IdRepoAppException(DATABASE_ACCESS_ERROR, e);
 		}
 	}
@@ -904,17 +886,5 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 			}
 		});
 		return attributeList;
-	}
-
-	private void deleteDraftDbRecords(String regId, UinDraft draft) {
-		uinBiometricDraftRepo.deleteByRegId(regId);
-		uinDocumentDraftRepo.deleteByRegId(regId);
-		if (draft.getBiometrics() != null) {
-			draft.getBiometrics().clear();
-		}
-		if (draft.getDocuments() != null) {
-			draft.getDocuments().clear();
-		}
-		uinDraftRepo.delete(draft);
 	}
 }

@@ -154,11 +154,4 @@ public class ObjectStoreHelper {
 	private String buildObjectName(String uinHash, boolean isBio, String fileRefId) {
 		return uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
 	}
-
-	public void deleteDemographicObject(String uinHash, String fileRefId) {
-		if (this.demographicObjectExists(uinHash, fileRefId)) {
-			String objectName = uinHash + SLASH + DEMOGRAPHICS + SLASH + fileRefId;
-			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
-		}
-	}
 }
