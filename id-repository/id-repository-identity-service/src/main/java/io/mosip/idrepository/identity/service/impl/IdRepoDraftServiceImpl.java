@@ -237,18 +237,20 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 	@Override
 	public IdResponseDTO updateDraftUin(String registrationId, String uin) throws IdRepoAppException {
 		try {
-			Optional<UinDraft> uinDraft = uinDraftRepo.findByRegId(registrationId);
-			if (uinDraft.isEmpty()) {
+			if (!uinDraftRepo.existsByRegId(registrationId)) {
 				idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
 						UPDATE_DRAFT, "RID NOT FOUND IN DB | regId=" + registrationId);
 				throw new IdRepoAppException(NO_RECORD_FOUND);
 			}
-			UinDraft draft = uinDraft.get();
-			draft.setUin(super.getUinToEncrypt(uin));
-			draft.setUinHash(super.getUinHash(uin));
-			draft.setUpdatedBy(IdRepoSecurityManager.getUser());
-			draft.setUpdatedDateTime(DateUtils2.getUTCCurrentDateTime());
-			uinDraftRepo.save(draft);
+			// UinDraft.isNew() always returns true, so save(entity) calls em.persist()
+			// which is a no-op for managed entities and does not generate an UPDATE SQL.
+			// Use the @Modifying bulk-update method instead.
+			uinDraftRepo.updateUinByRegId(
+					registrationId,
+					super.getUinToEncrypt(uin),
+					super.getUinHash(uin),
+					IdRepoSecurityManager.getUser(),
+					DateUtils2.getUTCCurrentDateTime());
 			return constructIdResponse(null, DRAFTED, null, null);
 		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
 			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
