@@ -221,7 +221,7 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 			newDraft.setStatusCode("DRAFT");
 			newDraft.setCreatedBy(IdRepoSecurityManager.getUser());
 			newDraft.setCreatedDateTime(DateUtils2.getUTCCurrentDateTime());
-			uinDraftRepo.save(newDraft);
+			uinDraftRepo.saveAndFlush(newDraft);
 			return constructIdResponse(null, DRAFTED, null, null);
 		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
 			idrepoDraftLogger.error(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
@@ -296,6 +296,15 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 							CREATE_DRAFT, "UIN NOT EXIST | uin=<redacted>");
 					throw new IdRepoAppException(NO_RECORD_FOUND);
 				}
+				// If a draft already exists for this UIN from a different (stale/failed) reg_id,
+				// discard it so the new packet can proceed cleanly.
+				UinDraft staleDraft = uinDraftRepo.findByUinHash(super.getUinHash(uin));
+				if (staleDraft != null && !registrationId.equals(staleDraft.getRegId())) {
+					idrepoDraftLogger.info(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
+							CREATE_DRAFT, "Discarding stale draft for UIN | old regId="
+									+ staleDraft.getRegId() + " | new regId=" + registrationId);
+					discardDraft(staleDraft.getRegId());
+				}
 				Uin uinObject = uinObjectOptional.get();
 				newDraft = mapper.convertValue(uinObject, UinDraft.class);
 				updateBiometricAndDocumentDrafts(registrationId, newDraft, uinObject);
@@ -319,7 +328,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 			newDraft.setStatusCode("DRAFT");
 			newDraft.setCreatedBy(IdRepoSecurityManager.getUser());
 			newDraft.setCreatedDateTime(DateUtils2.getUTCCurrentDateTime());
-			uinDraftRepo.save(newDraft);
+			// saveAndFlush forces the SQL to execute immediately so any constraint
+			// violations are caught inside this try-catch (not at transaction commit time).
+			uinDraftRepo.saveAndFlush(newDraft);
 
 			return constructIdResponse(null, DRAFTED, null, null);
 
