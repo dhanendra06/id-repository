@@ -296,14 +296,20 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 							CREATE_DRAFT, "UIN NOT EXIST | uin=<redacted>");
 					throw new IdRepoAppException(NO_RECORD_FOUND);
 				}
-				// If a draft already exists for this UIN from a different (stale/failed) reg_id,
-				// discard it so the new packet can proceed cleanly.
+				// CreateDraftStage already discards a draft for the same reg_id before calling
+				// here. But if a stale draft from a *different* reg_id holds the same uin_hash
+				// (e.g. a previously failed packet that was never cleaned up), the uin_hash
+				// UNIQUE constraint would fire on saveAndFlush. Discard it here as a safety net.
 				UinDraft staleDraft = uinDraftRepo.findByUinHash(super.getUinHash(uin));
 				if (staleDraft != null && !registrationId.equals(staleDraft.getRegId())) {
 					idrepoDraftLogger.info(IdRepoSecurityManager.getUser(), ID_REPO_DRAFT_SERVICE_IMPL,
-							CREATE_DRAFT, "Discarding stale draft for UIN | old regId="
-									+ staleDraft.getRegId() + " | new regId=" + registrationId);
+							CREATE_DRAFT, "Discarding stale draft | old regId=" + staleDraft.getRegId()
+									+ " | new regId=" + registrationId);
 					discardDraft(staleDraft.getRegId());
+					// deleteDraftDbRecords uses @Modifying bulk-deletes that send SQL immediately
+					// (bypassing Hibernate's action queue), so the stale uin_draft row is already
+					// gone within this transaction before the INSERT below.
+					uinDraftRepo.flush();
 				}
 				Uin uinObject = uinObjectOptional.get();
 				newDraft = mapper.convertValue(uinObject, UinDraft.class);
@@ -455,8 +461,6 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 				}
 			}
 
-			deleteDraftDbRecords(regId, draft);
-
 			return constructIdResponse(null, uinObject.getStatusCode(), null, draftVid);
 
 		} catch (DataAccessException | TransactionException | JDBCConnectionException e) {
@@ -499,13 +503,9 @@ public class IdRepoDraftServiceImpl extends IdRepoServiceImpl
 	private void deleteDraftDbRecords(String regId, UinDraft draft) {
 		uinBiometricDraftRepo.deleteByRegId(regId);
 		uinDocumentDraftRepo.deleteByRegId(regId);
-		if (draft.getBiometrics() != null) {
-			draft.getBiometrics().clear();
-		}
-		if (draft.getDocuments() != null) {
-			draft.getDocuments().clear();
-		}
-		uinDraftRepo.delete(draft);
+		// UinDraft.isNew() always returns true, so uinDraftRepo.delete(entity) silently
+		// skips deletion. Use the @Modifying bulk-delete method instead.
+		uinDraftRepo.deleteByRegId(regId);
 	}
 
 	@Override
