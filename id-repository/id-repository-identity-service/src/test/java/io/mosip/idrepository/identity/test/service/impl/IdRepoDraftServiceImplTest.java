@@ -38,8 +38,10 @@ import io.mosip.idrepository.identity.helper.ObjectStoreHelper;
 import io.mosip.idrepository.identity.helper.IdRepoServiceHelper;
 import io.mosip.idrepository.identity.helper.VidDraftHelper;
 import io.mosip.idrepository.identity.repository.IdentityUpdateTrackerRepo;
+import io.mosip.idrepository.identity.repository.UinBiometricDraftRepo;
 import io.mosip.idrepository.identity.repository.UinBiometricHistoryRepo;
 import io.mosip.idrepository.identity.repository.UinBiometricRepo;
+import io.mosip.idrepository.identity.repository.UinDocumentDraftRepo;
 import io.mosip.idrepository.identity.repository.UinDocumentHistoryRepo;
 import io.mosip.idrepository.identity.repository.UinDocumentRepo;
 import io.mosip.idrepository.identity.repository.UinDraftRepo;
@@ -203,6 +205,12 @@ public class IdRepoDraftServiceImplTest {
 
 	@Mock
 	private BiometricExtractionService biometricExtractionService;
+
+	@Mock
+	private UinBiometricDraftRepo uinBiometricDraftRepo;
+
+	@Mock
+	private UinDocumentDraftRepo uinDocumentDraftRepo;
 
 	@InjectMocks
 	IdRepoDraftServiceImpl idRepoServiceImpl;
@@ -596,7 +604,7 @@ public class IdRepoDraftServiceImplTest {
 		}
 	}
 
-	@Test(expected = IdRepoAppException.class)
+	@Test
 	public void testExtractBiometrics() throws IdRepoAppException, NoSuchAlgorithmException {
 		Map<String, String> extractionFormats = new HashMap<>();
 		extractionFormats.put(FINGER_EXTRACTION_FORMAT, "fingerFormat");
@@ -825,7 +833,7 @@ public class IdRepoDraftServiceImplTest {
 	@Test
 	public void testDiscardDraftJDBCConnectionException() throws IdRepoAppException {
 		try {
-			when(uinDraftRepo.existsByRegId(Mockito.any())).thenThrow(JDBCConnectionException.class);
+			when(uinDraftRepo.findByRegId(Mockito.any())).thenThrow(JDBCConnectionException.class);
 			IdResponseDTO response = idRepoServiceImpl.discardDraft("123567890");
 			assertNotNull(response);
 		} catch (IdRepoAppException e) {

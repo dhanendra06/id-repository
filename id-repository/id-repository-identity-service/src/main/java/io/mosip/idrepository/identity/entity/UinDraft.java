@@ -110,6 +110,13 @@ public class UinDraft implements Persistable<String>, UinInfo, Serializable {
 	@Column(name = "del_dtimes")
 	private LocalDateTime deletedDateTime;
 
+	/**
+	 * Object-store path prefix for LOST packets (SHA-256 of registrationId).
+	 * Null for NEW/UPDATE packets (which use uinHash as prefix).
+	 */
+	@Column(name = "path_key")
+	private String pathKey;
+
 	@OneToMany(fetch = FetchType.LAZY, mappedBy = "uin", cascade = CascadeType.ALL)
 	private List<UinBiometricDraft> biometrics;
 

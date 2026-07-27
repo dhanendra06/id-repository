@@ -14,6 +14,19 @@ import io.mosip.idrepository.core.exception.IdRepoAppException;
 public interface IdRepoDraftService<REQUEST, RESPONSE> {
 
 	public RESPONSE createDraft(String registrationId, String uin) throws IdRepoAppException;
+
+	/**
+	 * Creates a draft WITHOUT allocating a UIN. Intended for LOST packets where
+	 * the UIN is resolved later (after ABIS deduplication). Uses SHA-256 of
+	 * registrationId as the object-store path prefix (pathKey).
+	 */
+	public RESPONSE createDraftV2(String registrationId) throws IdRepoAppException;
+
+	/**
+	 * Stamps UIN and uinHash on an existing LOST draft after ABIS finds the match.
+	 * Called by Bio-Dedupe after resolving the matched registration's UIN.
+	 */
+	public RESPONSE updateDraftUin(String registrationId, String uin) throws IdRepoAppException;
 	
 	public RESPONSE updateDraft(String registrationId, REQUEST request) throws IdRepoAppException;
 	

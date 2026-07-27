@@ -34,6 +34,7 @@ public class ObjectStoreHelper {
 	private static final String SLASH = "/";
 	private static final String BIOMETRICS = "Biometrics";
 	private static final String DEMOGRAPHICS = "Demographics";
+	private static final String DRAFT = "_draft";
 
 	@Value("${" + OBJECT_STORE_ACCOUNT_NAME + "}")
 	private String objectStoreAccountName;
@@ -91,6 +92,79 @@ public class ObjectStoreHelper {
 			String objectName = uinHash + SLASH + BIOMETRICS + SLASH + fileRefId;
 			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
 		}
+	}
+
+	// ── Draft path: {pathPrefix}/_draft/Biometrics/{fileRefId}  ──────────────────
+
+	public void putDraftBiometricObject(String pathPrefix, String fileRefId, byte[] data) throws IdRepoAppException {
+		putDraftObject(pathPrefix, true, fileRefId, data, bioDataRefId);
+	}
+
+	public void putDraftDemographicObject(String pathPrefix, String fileRefId, byte[] data) throws IdRepoAppException {
+		putDraftObject(pathPrefix, false, fileRefId, data, demoDataRefId);
+	}
+
+	public boolean draftBiometricObjectExists(String pathPrefix, String fileRefId) {
+		String objectName = buildDraftObjectName(pathPrefix, true, fileRefId);
+		return objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+	}
+
+	public boolean draftDemographicObjectExists(String pathPrefix, String fileRefId) {
+		String objectName = buildDraftObjectName(pathPrefix, false, fileRefId);
+		return objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+	}
+
+	/**
+	 * Reads biometric from _draft/ path; falls back to live path if not yet in draft.
+	 */
+	public byte[] getDraftBiometricObject(String pathPrefix, String fileRefId) throws IdRepoAppException {
+		if (draftBiometricObjectExists(pathPrefix, fileRefId)) {
+			return getDraftObject(pathPrefix, true, fileRefId, bioDataRefId);
+		}
+		return getBiometricObject(pathPrefix, fileRefId);
+	}
+
+	/** Reads demographic from _draft/ path; falls back to live path if not yet in draft. */
+	public byte[] getDraftDemographicObject(String pathPrefix, String fileRefId) throws IdRepoAppException {
+		if (draftDemographicObjectExists(pathPrefix, fileRefId)) {
+			return getDraftObject(pathPrefix, false, fileRefId, demoDataRefId);
+		}
+		return getDemographicObject(pathPrefix, fileRefId);
+	}
+
+	public void deleteDraftBiometricObject(String pathPrefix, String fileRefId) {
+		String objectName = buildDraftObjectName(pathPrefix, true, fileRefId);
+		if (objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName)) {
+			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		}
+	}
+
+	public void deleteDraftDemographicObject(String pathPrefix, String fileRefId) {
+		String objectName = buildDraftObjectName(pathPrefix, false, fileRefId);
+		if (objectStore.exists(objectStoreAccountName, objectStoreBucketName, null, null, objectName)) {
+			objectStore.deleteObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		}
+	}
+
+	/**
+	 * Copies biometric from draft path to live path by streaming raw encrypted bytes
+	 * (no re-encryption needed — bytes are already encrypted).
+	 * src: {srcPrefix}/_draft/Biometrics/{fileRefId}
+	 * dst: {destPrefix}/Biometrics/{fileRefId}
+	 */
+	public void copyAndReplaceBiometricDraftToLive(String srcPrefix, String destPrefix, String fileRefId)
+			throws IdRepoAppException {
+		String srcKey = buildDraftObjectName(srcPrefix, true, fileRefId);
+		String destKey = buildObjectName(destPrefix, true, fileRefId);
+		copyRaw(srcKey, destKey);
+	}
+
+	/** Copies demographic from draft path to live path (raw encrypted bytes). */
+	public void copyAndReplaceDemographicDraftToLive(String srcPrefix, String destPrefix, String fileRefId)
+			throws IdRepoAppException {
+		String srcKey = buildDraftObjectName(srcPrefix, false, fileRefId);
+		String destKey = buildObjectName(destPrefix, false, fileRefId);
+		copyRaw(srcKey, destKey);
 	}
 
 	private boolean exists(String uinHash, boolean isBio, String fileRefId) {
@@ -153,5 +227,73 @@ public class ObjectStoreHelper {
 
 	private String buildObjectName(String uinHash, boolean isBio, String fileRefId) {
 		return uinHash + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
+	}
+
+	private String buildDraftObjectName(String pathPrefix, boolean isBio, String fileRefId) {
+		return pathPrefix + SLASH + DRAFT + SLASH + (isBio ? BIOMETRICS : DEMOGRAPHICS) + SLASH + fileRefId;
+	}
+
+	private void putDraftObject(String pathPrefix, boolean isBio, String fileRefId, byte[] data, String refId)
+			throws IdRepoAppException {
+		if (data == null || data.length == 0) {
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(), "Input data is null or empty");
+		}
+		String objectName = buildDraftObjectName(pathPrefix, isBio, fileRefId);
+		try (InputStream encryptData = new ByteArrayInputStream(securityManager.encrypt(data, refId))) {
+			objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName, encryptData);
+			mosipLogger.debug("Uploaded draft object: {} ({} bytes)", objectName, data.length);
+		} catch (IOException | ObjectStoreAdapterException e) {
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Failed to store draft object: " + e.getMessage(), e);
+		}
+	}
+
+	private byte[] getDraftObject(String pathPrefix, boolean isBio, String fileRefId, String refId)
+			throws IdRepoAppException {
+		String objectName = buildDraftObjectName(pathPrefix, isBio, fileRefId);
+		InputStream rawStream;
+		try {
+			rawStream = objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, objectName);
+		} catch (ObjectStoreAdapterException e) {
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Failed to fetch draft object: " + objectName, e);
+		}
+		if (rawStream == null) {
+			throw new IdRepoAppException(FILE_NOT_FOUND);
+		}
+		try (InputStream s3Stream = new BoundedInputStream(new BufferedInputStream(rawStream), maxObjectSizeBytes + 1)) {
+			byte[] encryptedData = IOUtils.toByteArray(s3Stream);
+			if (encryptedData.length > maxObjectSizeBytes) {
+				throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+						"Draft object size exceeds allowed limit: " + objectName);
+			}
+			byte[] decryptedData = securityManager.decrypt(encryptedData, refId);
+			encryptedData = null;
+			return decryptedData;
+		} catch (IOException | ObjectStoreAdapterException e) {
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Failed to retrieve draft object: " + e.getMessage(), e);
+		}
+	}
+
+	/** Copies raw encrypted bytes from srcKey to destKey without re-encryption. */
+	private void copyRaw(String srcKey, String destKey) throws IdRepoAppException {
+		InputStream rawStream;
+		try {
+			rawStream = objectStore.getObject(objectStoreAccountName, objectStoreBucketName, null, null, srcKey);
+		} catch (ObjectStoreAdapterException e) {
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Failed to read source for copy: " + srcKey, e);
+		}
+		if (rawStream == null) {
+			throw new IdRepoAppException(FILE_NOT_FOUND);
+		}
+		try {
+			objectStore.putObject(objectStoreAccountName, objectStoreBucketName, null, null, destKey, rawStream);
+			mosipLogger.debug("Copied draft to live: {} -> {}", srcKey, destKey);
+		} catch (ObjectStoreAdapterException e) {
+			throw new IdRepoAppException(FILE_STORAGE_ACCESS_ERROR.getErrorCode(),
+					"Failed to write destination for copy: " + destKey, e);
+		}
 	}
 }
